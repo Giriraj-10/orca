@@ -1,0 +1,29 @@
+{
+  "name": "orca-marine-ecosystem",
+  "version": "1.0.0",
+  "description": "ORCA — Marine EcOsystem Reasoning with Collaborative Agents",
+  "main": "server/src/server.js",
+  "scripts": {
+    "install-all": "npm install && npm install --prefix server && npm install --prefix client",
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run server\" \"npm run client\"",
+    "server": "npm run dev --prefix server",
+    "client": "npm run dev --prefix client",
+    "seed": "node server/src/data/seedRunner.js",
+    "build": "npm run build --prefix client",
+    "start": "npm run start --prefix server",
+    "test": "node --test server/tests/api.test.js"
+  },
+  "keywords": [
+    "orca",
+    "marine-intelligence",
+    "earth-observation",
+    "collaborative-agents",
+    "oceanography",
+    "smart-india-hackathon"
+  ],
+  "author": "ORCA Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

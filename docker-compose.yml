@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: orca_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - orca_network
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: orca_server
+    restart: unless-stopped
+    environment:
+      - PORT=5000
+      - CLIENT_URL=http://localhost:5173
+      - MONGODB_URI=mongodb://mongodb:27017/orca
+      - JWT_SECRET=orca_docker_jwt_secret_dev_key_secure_marine_agents_9921
+      - DATA_MODE=demo
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    ports:
+      - "5000:5000"
+    depends_on:
+      - mongodb
+    networks:
+      - orca_network
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: orca_client
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - server
+    networks:
+      - orca_network
+
+volumes:
+  mongo_data:
+
+networks:
+  orca_network:
+    driver: bridge

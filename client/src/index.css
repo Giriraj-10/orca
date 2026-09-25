@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-ocean-950 text-slate-100 font-sans antialiased overflow-x-hidden;
+    background-color: #040914;
+    color: #f1f5f9;
+  }
+
+  /* Custom dark scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #081225;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #19335f;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #06b6d4;
+  }
+}
+
+/* Leaflet dark custom theme */
+.leaflet-container {
+  background-color: #081225 !important;
+  font-family: inherit !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #0c1a33 !important;
+  color: #f8fafc !important;
+  border: 1px solid #19335f !important;
+  border-radius: 0.5rem !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
+}
+
+.leaflet-popup-tip {
+  background: #0c1a33 !important;
+}
+
+.leaflet-container a.leaflet-popup-close-button {
+  color: #94a3b8 !important;
+  padding: 6px !important;
+}
+
+.leaflet-container a.leaflet-popup-close-button:hover {
+  color: #22d3ee !important;
+}
+
+/* Glass panel utility */
+.glass-panel {
+  background: rgba(12, 26, 51, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(25, 51, 95, 0.6);
+}
+
+.glass-card {
+  background: rgba(17, 35, 68, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(35, 71, 126, 0.4);
+}
+
+.glass-card:hover {
+  border-color: rgba(6, 182, 212, 0.4);
+}
+
+/* Ocean glow effects */
+.glow-cyan {
+  box-shadow: 0 0 15px rgba(6, 182, 212, 0.25);
+}
+
+.glow-teal {
+  box-shadow: 0 0 15px rgba(20, 184, 166, 0.25);
+}
