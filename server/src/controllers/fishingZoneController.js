@@ -68,11 +68,16 @@ const getNearbyFishingZones = async (req, res, next) => {
       radiusKm
     });
 
+    const enrichedZones = (pfzResult.zones || []).map(z => ({
+      ...z,
+      source: z.source || pfzResult.source
+    }));
+
     res.json({
       success: true,
       origin: { latitude: lat, longitude: lng },
-      count: pfzResult.zones?.length || 0,
-      data: pfzResult.zones || [],
+      count: enrichedZones.length,
+      data: enrichedZones,
       source: pfzResult.source,
       isOfficialAdvisory: Boolean(pfzResult.isOfficialAdvisory),
       disclaimer: pfzResult.disclaimer,

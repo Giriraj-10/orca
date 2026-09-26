@@ -8,12 +8,26 @@ const analyzeRisk = async (req, res, next) => {
     const lat = parseFloat(req.body.latitude || req.query.latitude) || 18.922;
     const lng = parseFloat(req.body.longitude || req.query.longitude) || 72.8347;
 
-    const [weather, marine, geofence, alerts] = await Promise.all([
+    let [weather, marine, geofence, alerts] = await Promise.all([
       dsm.weather.getWeather(lat, lng),
       dsm.marine.getConditions(lat, lng),
       dsm.geo.checkGeofence(lat, lng),
       dsm.alert.getAlerts(lat, lng, 100)
     ]);
+
+    // Support simulation/test parameter overrides
+    if (req.body.waveHeight !== undefined) {
+      marine = { ...marine, waveHeight: req.body.waveHeight, wave: { height: req.body.waveHeight } };
+    }
+    if (req.body.windSpeed !== undefined) {
+      weather = { ...weather, windSpeed: req.body.windSpeed };
+    }
+    if (req.body.visibility !== undefined) {
+      weather = { ...weather, visibility: req.body.visibility };
+    }
+    if (req.body.alertsCount !== undefined) {
+      alerts = { ...alerts, count: req.body.alertsCount };
+    }
 
     const riskResult = await riskAgent.execute(weather, marine, geofence, alerts);
 
@@ -21,6 +35,7 @@ const analyzeRisk = async (req, res, next) => {
       success: true,
       coordinates: { latitude: lat, longitude: lng },
       risk: riskResult.data,
+      assessment: riskResult.data,
       liveInputs: {
         waveHeightMeters: marine.wave?.height ?? marine.waveHeight,
         windSpeedKmh: weather.windSpeed,

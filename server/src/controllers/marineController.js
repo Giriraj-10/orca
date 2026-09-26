@@ -72,6 +72,8 @@ const getConditions = async (req, res, next) => {
 
     res.json({
       success: true,
+      location: { lat, lng, latitude: lat, longitude: lng },
+      source: marine.source,
       region: {
         id: targetRegion ? targetRegion.id : 'custom',
         name: targetRegion ? targetRegion.name : 'Target Coastal Waters',
@@ -152,6 +154,8 @@ const getForecast = async (req, res, next) => {
       success: true,
       location: { latitude: lat, longitude: lng },
       hourlyForecast: hourlyCombined,
+      forecast: hourlyCombined,
+      hourly: hourlyCombined,
       source: 'Open-Meteo Marine & Numerical Weather Forecast',
       isLive: Boolean(marine.isLive && weather.isLive),
       timestamp: new Date().toISOString()

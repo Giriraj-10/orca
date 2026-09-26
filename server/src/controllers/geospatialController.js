@@ -51,14 +51,23 @@ const getAllGeofences = async (req, res, next) => {
 };
 
 // @desc    Calculate minimum-risk dynamic route avoiding hazards and MPAs
-// @route   POST /api/routes/safest
 const calculateRoute = async (req, res, next) => {
   try {
-    const { startLat, startLng, destLat, destLng, vesselSpeedKnots } = req.body;
-    if (!startLat || !startLng || !destLat || !destLng) {
+    let { startLat, startLng, destLat, destLng, start, destination, vesselSpeedKnots } = req.body;
+    
+    if (start && Array.isArray(start)) {
+      startLng = start[0];
+      startLat = start[1];
+    }
+    if (destination && Array.isArray(destination)) {
+      destLng = destination[0];
+      destLat = destination[1];
+    }
+
+    if (startLat === undefined || startLng === undefined || destLat === undefined || destLng === undefined) {
       return res.status(400).json({
         success: false,
-        message: 'startLat, startLng, destLat, and destLng are required'
+        message: 'startLat, startLng, destLat, and destLng (or start, destination coordinate arrays) are required'
       });
     }
 

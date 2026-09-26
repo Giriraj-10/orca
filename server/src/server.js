@@ -46,7 +46,9 @@ if (env.NODE_ENV !== 'test') {
 }
 
 // Connect Database (resilient - continues gracefully even if Mongo offline)
-connectDB();
+if (process.env.NODE_ENV !== 'test') {
+  connectDB();
+}
 
 // API Routes
 app.use('/api/health', healthRoutes);
