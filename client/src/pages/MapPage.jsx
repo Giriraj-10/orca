@@ -4,8 +4,11 @@ import {
   TileLayer,
   CircleMarker,
   Circle,
+  Polygon,
+  Polyline,
   Popup,
-  useMap
+  useMap,
+  useMapEvents
 } from 'react-leaflet';
 import L from 'leaflet';
 import {
@@ -21,15 +24,20 @@ import {
   Info,
   X,
   Compass,
-  Check
+  Check,
+  Search,
+  Navigation,
+  Shield,
+  Clock,
+  Radio
 } from 'lucide-react';
-import { mapService } from '../services/api';
+import { mapService, geoService } from '../services/api';
 import { useLocation } from '../context/LocationContext';
 import ConfidenceBadge from '../components/common/ConfidenceBadge';
 import RiskBadge from '../components/common/RiskBadge';
 import DisclaimerBanner from '../components/common/DisclaimerBanner';
 
-// Helper component to smoothly pan/zoom map when region changes
+// Helper component to smoothly pan/zoom map when center changes
 function ChangeMapView({ center, zoom }) {
   const map = useMap();
   useEffect(() => {
@@ -38,37 +46,61 @@ function ChangeMapView({ center, zoom }) {
   return null;
 }
 
+// Map Click Listener component: Clicking anywhere updates the global coordinates!
+function MapClickHandler({ onMapClick }) {
+  useMapEvents({
+    click(e) {
+      onMapClick(e.latlng.lat, e.latlng.lng);
+    }
+  });
+  return null;
+}
+
 const MapPage = () => {
-  const { currentRegion, allRegions, selectRegionById, useBrowserGeolocation } = useLocation();
+  const {
+    currentRegion,
+    allRegions,
+    selectRegionById,
+    setCustomLocation,
+    searchAndSetLocation,
+    useBrowserGeolocation,
+    searching,
+    timeFilter,
+    setTimeFilter
+  } = useLocation();
 
   const [layersData, setLayersData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState('');
+  const [selectedFeature, setSelectedFeature] = useState(null);
+  const [activeRoute, setActiveRoute] = useState(null);
+  const [calculatingRoute, setCalculatingRoute] = useState(false);
+
   const [activeLayers, setActiveLayers] = useState({
     sst: true,
     chlorophyll: true,
     fishingZones: true,
     riskZones: true,
     weather: true,
-    waveHeight: false,
-    tide: false
+    waveHeight: true,
+    geofences: true
   });
 
-  const [selectedFeature, setSelectedFeature] = useState(null);
+  const fetchLayers = async (lat, lng) => {
+    setLoading(true);
+    try {
+      const res = await mapService.getLayers(lat, lng);
+      setLayersData(res.layers);
+    } catch (err) {
+      console.warn('Map layers fetch error:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchLayers = async () => {
-      setLoading(true);
-      try {
-        const res = await mapService.getLayers();
-        setLayersData(res.layers);
-      } catch (err) {
-        console.warn('Map layers fetch error:', err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchLayers();
-  }, []);
+    fetchLayers(currentRegion.lat, currentRegion.lng);
+  }, [currentRegion.lat, currentRegion.lng]);
 
   const toggleLayer = (layerKey) => {
     setActiveLayers((prev) => ({
@@ -77,35 +109,87 @@ const MapPage = () => {
     }));
   };
 
+  const handleMapClick = (lat, lng) => {
+    setCustomLocation(`Offshore Sector (${lat.toFixed(2)}°N, ${lng.toFixed(2)}°E)`, lat, lng);
+  };
+
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    if (searchInput.trim()) {
+      await searchAndSetLocation(searchInput.trim());
+      setSearchInput('');
+    }
+  };
+
+  const handleCalculateRouteToZone = async (zone) => {
+    setCalculatingRoute(true);
+    try {
+      const res = await geoService.calculateRoute(
+        currentRegion.lat,
+        currentRegion.lng,
+        zone.latitude,
+        zone.longitude,
+        10
+      );
+      if (res && res.route) {
+        setActiveRoute(res.route);
+      }
+    } catch (err) {
+      console.warn('Route calculation error:', err.message);
+    } finally {
+      setCalculatingRoute(false);
+    }
+  };
+
   const mapCenter = [currentRegion.lat, currentRegion.lng];
 
   return (
     <div className="relative h-[calc(100vh-6.5rem)] flex flex-col rounded-2xl overflow-hidden border border-ocean-800 shadow-2xl bg-ocean-950">
-      {/* Map Control Bar: Region Quick Picker, GPS, Layer Toggles */}
+      {/* Top Map Control Bar: Geocoding Search, Presets, GPS, Layers */}
       <div className="bg-ocean-900/95 border-b border-ocean-800 p-3 flex flex-wrap items-center justify-between gap-3 z-10 backdrop-blur-md">
-        {/* Left: Region jump selector */}
-        <div className="flex items-center space-x-2">
-          <MapPin className="w-4 h-4 text-cyan-400" />
-          <span className="text-xs font-semibold text-slate-300 hidden sm:inline">Coastal Region:</span>
-          <select
-            value={currentRegion.id}
-            onChange={(e) => selectRegionById(e.target.value)}
-            className="bg-ocean-950 border border-ocean-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 font-semibold focus:outline-none focus:border-cyan-500 cursor-pointer"
-          >
-            {allRegions.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name} ({r.sea})
-              </option>
-            ))}
-          </select>
+        {/* Left: Search & Region jump selector */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Geocoding Search */}
+          <form onSubmit={handleSearch} className="flex items-center relative w-48 sm:w-60">
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search port / coords..."
+              className="w-full pl-7 pr-12 py-1 bg-ocean-950 border border-ocean-700 rounded-lg text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+            />
+            <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-2 top-2" />
+            <button
+              type="submit"
+              disabled={searching}
+              className="absolute right-1 top-1 px-1.5 py-0.5 bg-ocean-800 text-cyan-300 text-[10px] font-semibold rounded"
+            >
+              Go
+            </button>
+          </form>
 
-          <button
-            onClick={useBrowserGeolocation}
-            className="p-1.5 rounded-lg bg-ocean-950 border border-ocean-700 hover:border-cyan-500 text-slate-300 hover:text-cyan-300 transition-colors"
-            title="Locate via GPS"
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-          </button>
+          {/* Preset Coastal Region dropdown */}
+          <div className="flex items-center space-x-1.5">
+            <select
+              value={currentRegion.id}
+              onChange={(e) => selectRegionById(e.target.value)}
+              className="bg-ocean-950 border border-ocean-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 font-semibold focus:outline-none focus:border-cyan-500 cursor-pointer"
+            >
+              {allRegions.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={useBrowserGeolocation}
+              className="p-1 rounded-lg bg-ocean-950 border border-ocean-700 hover:border-cyan-500 text-slate-300 hover:text-cyan-300 transition-colors"
+              title="Locate via GPS"
+            >
+              <Crosshair className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* Right: Layer Checklist Buttons */}
@@ -113,11 +197,11 @@ const MapPage = () => {
           {[
             { key: 'sst', label: 'SST', icon: Thermometer, color: 'text-orange-400' },
             { key: 'chlorophyll', label: 'Chlorophyll', icon: Sparkles, color: 'text-emerald-400' },
-            { key: 'fishingZones', label: 'Fishing Zones', icon: Fish, color: 'text-teal-400' },
-            { key: 'riskZones', label: 'Risk Zones', icon: ShieldAlert, color: 'text-rose-400' },
-            { key: 'weather', label: 'Weather', icon: Wind, color: 'text-sky-400' },
-            { key: 'waveHeight', label: 'Wave Height', icon: Waves, color: 'text-blue-400' },
-            { key: 'tide', label: 'Tide', icon: Compass, color: 'text-purple-400' },
+            { key: 'fishingZones', label: 'PFZ Zones', icon: Fish, color: 'text-teal-400' },
+            { key: 'riskZones', label: 'Risk Danger', icon: ShieldAlert, color: 'text-rose-400' },
+            { key: 'geofences', label: 'Protected MPAs', icon: Shield, color: 'text-amber-400' },
+            { key: 'weather', label: 'Winds', icon: Wind, color: 'text-sky-400' },
+            { key: 'waveHeight', label: 'Waves', icon: Waves, color: 'text-blue-400' },
           ].map((item) => {
             const isActive = activeLayers[item.key];
             const IconComp = item.icon;
@@ -125,7 +209,7 @@ const MapPage = () => {
               <button
                 key={item.key}
                 onClick={() => toggleLayer(item.key)}
-                className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                className={`flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-medium transition-all ${
                   isActive
                     ? 'bg-cyan-950 border border-cyan-500/60 text-cyan-200 shadow-sm'
                     : 'bg-ocean-950/70 border border-ocean-800 text-slate-400 hover:text-slate-200'
@@ -140,95 +224,76 @@ const MapPage = () => {
         </div>
       </div>
 
-      {/* Main Map Canvas */}
-      <div className="flex-1 relative z-0">
+      {/* Main Map Canvas Area */}
+      <div className="relative flex-1 w-full h-full">
         <MapContainer
           center={mapCenter}
-          zoom={9}
+          zoom={8}
           scrollWheelZoom={true}
-          style={{ height: '100%', width: '100%' }}
+          className="w-full h-full z-0"
         >
-          <ChangeMapView center={mapCenter} zoom={9} />
+          <ChangeMapView center={mapCenter} zoom={8} />
+          <MapClickHandler onMapClick={handleMapClick} />
 
-          {/* CartoDB Dark Matter Basemap */}
+          {/* Dark Maritime Tile Basemap */}
           <TileLayer
-            attribution='&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap'
+            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
             url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           />
 
-          {/* Layer 1: SST Thermal Points */}
+          {/* LAYER 1: SST Thermal Points */}
           {activeLayers.sst &&
             layersData?.sst?.map((p) => (
               <CircleMarker
                 key={p.id}
                 center={[p.latitude, p.longitude]}
-                radius={12}
+                radius={24}
                 pathOptions={{
                   fillColor: p.color,
-                  fillOpacity: 0.55,
+                  fillOpacity: 0.35,
+                  stroke: true,
                   color: p.color,
                   weight: 1.5
                 }}
                 eventHandlers={{
-                  click: () =>
-                    setSelectedFeature({
-                      type: 'SST Thermal Observation',
-                      name: `Sea Surface Temperature: ${p.label}`,
-                      location: `[${p.latitude.toFixed(3)}, ${p.longitude.toFixed(3)}]`,
-                      metrics: { 'SST Value': p.label, Source: 'Simulated In-Situ & Satellite Blend' },
-                      reasoning: 'Thermal gradient boundary where pelagic and schooling fish tend to aggregate.',
-                      confidence: 0.88,
-                      mode: 'DEMO'
-                    })
+                  click: () => setSelectedFeature({ type: 'SST', data: p })
                 }}
               >
                 <Popup>
-                  <div className="text-xs text-slate-100">
-                    <strong className="text-orange-400">SST Point:</strong> {p.label}
+                  <div className="text-xs p-1">
+                    <strong className="text-orange-400">SST Contours:</strong> {p.sst}°C<br />
+                    <span className="text-[10px] text-slate-400">Source: {p.source}</span>
                   </div>
                 </Popup>
               </CircleMarker>
             ))}
 
-          {/* Layer 2: Chlorophyll Points */}
+          {/* LAYER 2: Chlorophyll Concentration Points */}
           {activeLayers.chlorophyll &&
             layersData?.chlorophyll?.map((p) => (
               <CircleMarker
                 key={p.id}
                 center={[p.latitude, p.longitude]}
-                radius={9}
+                radius={28}
                 pathOptions={{
                   fillColor: p.color,
-                  fillOpacity: 0.65,
-                  color: '#10b981',
-                  weight: 1.5
+                  fillOpacity: 0.28,
+                  stroke: false
                 }}
                 eventHandlers={{
-                  click: () =>
-                    setSelectedFeature({
-                      type: 'Satellite Chlorophyll-a Observation',
-                      name: `Chlorophyll-a: ${p.label}`,
-                      location: `[${p.latitude.toFixed(3)}, ${p.longitude.toFixed(3)}]`,
-                      metrics: {
-                        'Concentration': p.label,
-                        'Sensor': 'Ocean Colour Monitor (OCM-3 / MODIS)',
-                        'Productivity': p.chlorophyll >= 1.8 ? 'Elevated Primary Productivity' : 'Moderate Coastal Waters'
-                      },
-                      reasoning: 'High chlorophyll concentration indicates active phytoplankton blooms supporting forage species.',
-                      confidence: 0.91,
-                      mode: 'DEMO'
-                    })
+                  click: () => setSelectedFeature({ type: 'CHLOROPHYLL', data: p })
                 }}
               >
                 <Popup>
-                  <div className="text-xs text-slate-100">
-                    <strong className="text-emerald-400">Chlorophyll:</strong> {p.label}
+                  <div className="text-xs p-1">
+                    <strong className="text-emerald-400">Chlorophyll-a:</strong> {p.chlorophyll} mg/m³<br />
+                    <span className="text-[10px] text-slate-400">Productivity front</span>
                   </div>
                 </Popup>
               </CircleMarker>
             ))}
 
-          {/* Layer 3: Potential Fishing Zones (PFZs) */}
+          {/* LAYER 3: Potential Fishing Zones (PFZs) */}
           {activeLayers.fishingZones &&
             layersData?.fishingZones?.map((z) => (
               <React.Fragment key={z.id}>
@@ -236,253 +301,195 @@ const MapPage = () => {
                   center={[z.latitude, z.longitude]}
                   radius={z.radiusMeters || 12000}
                   pathOptions={{
-                    fillColor: z.suitability === 'HIGH' ? '#14b8a6' : '#f59e0b',
-                    fillOpacity: 0.22,
-                    color: '#06b6d4',
+                    color: z.suitability === 'HIGH' ? '#14b8a6' : '#f59e0b',
                     weight: 2,
-                    dashArray: '4, 6'
+                    dashArray: '6, 6',
+                    fillColor: z.suitability === 'HIGH' ? '#14b8a6' : '#f59e0b',
+                    fillOpacity: 0.18
+                  }}
+                  eventHandlers={{
+                    click: () => setSelectedFeature({ type: 'PFZ', data: z })
                   }}
                 />
                 <CircleMarker
                   center={[z.latitude, z.longitude]}
-                  radius={8}
+                  radius={6}
                   pathOptions={{
-                    fillColor: '#06b6d4',
-                    fillOpacity: 0.9,
+                    fillColor: z.suitability === 'HIGH' ? '#14b8a6' : '#f59e0b',
+                    fillOpacity: 1,
                     color: '#ffffff',
-                    weight: 2
+                    weight: 1.5
                   }}
-                  eventHandlers={{
-                    click: () =>
-                      setSelectedFeature({
-                        type: 'Potential Fishing Zone (PFZ)',
-                        name: z.name,
-                        location: `Latitude: ${z.latitude.toFixed(4)}, Longitude: ${z.longitude.toFixed(4)}`,
-                        suitability: z.suitability,
-                        confidence: z.confidence,
-                        metrics: {
-                          'SST': `${z.indicators?.sst || 27.4}°C`,
-                          'Chlorophyll': `${z.indicators?.chlorophyll || 1.85} mg/m³`,
-                          'Wave Height': `${z.indicators?.waveHeight || 1.1} m`,
-                          'Surface Wind': `${z.indicators?.windSpeed || 14} km/h`,
-                          'Target Species': (z.targetSpecies || []).join(', ')
-                        },
-                        reasoning: z.reasoning,
-                        mode: 'DEMO'
-                      })
-                  }}
-                >
-                  <Popup>
-                    <div className="text-xs text-slate-100 p-1">
-                      <div className="font-bold text-cyan-300">{z.name}</div>
-                      <div className="text-slate-300 text-[11px] mt-1">
-                        Suitability: <strong>{z.suitability}</strong> ({Math.round(z.confidence * 100)}%)
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-1">Click to view full scientific evidence.</div>
-                    </div>
-                  </Popup>
-                </CircleMarker>
+                />
               </React.Fragment>
             ))}
 
-          {/* Layer 4: Marine Risk Danger Zones */}
+          {/* LAYER 4: Risk Zones */}
           {activeLayers.riskZones &&
             layersData?.riskZones?.map((rz) => (
               <Circle
                 key={rz.id}
                 center={[rz.latitude, rz.longitude]}
-                radius={rz.radiusMeters || 18000}
+                radius={rz.radiusMeters || 16000}
                 pathOptions={{
-                  fillColor: rz.color,
-                  fillOpacity: 0.25,
                   color: rz.color,
-                  weight: 2
+                  weight: 1.5,
+                  dashArray: '4, 4',
+                  fillColor: rz.color,
+                  fillOpacity: 0.12
                 }}
                 eventHandlers={{
-                  click: () =>
-                    setSelectedFeature({
-                      type: 'Marine Hazard & Risk Zone',
-                      name: rz.name,
-                      riskLevel: rz.riskLevel,
-                      location: `[${rz.latitude.toFixed(4)}, ${rz.longitude.toFixed(4)}]`,
-                      metrics: {
-                        'Risk Level': rz.riskLevel,
-                        'Wave Swell': `${rz.waveHeight} m`,
-                        'Wind Gusts': `${rz.windSpeed} km/h`
-                      },
-                      reasoning: rz.warning,
-                      confidence: 0.85,
-                      mode: 'DEMO'
-                    })
+                  click: () => setSelectedFeature({ type: 'RISK_ZONE', data: rz })
                 }}
-              >
-                <Popup>
-                  <div className="text-xs text-slate-100">
-                    <strong className="text-rose-400">{rz.name}</strong>
-                    <div className="mt-1">Risk: {rz.riskLevel}</div>
-                  </div>
-                </Popup>
-              </Circle>
+              />
             ))}
 
-          {/* Layer 5: Weather Stations */}
-          {activeLayers.weather &&
-            layersData?.weather?.map((wx) => (
-              <CircleMarker
-                key={wx.id}
-                center={[wx.latitude, wx.longitude]}
-                radius={6}
-                pathOptions={{ fillColor: '#38bdf8', color: '#0284c7', weight: 1.5, fillOpacity: 0.8 }}
-                eventHandlers={{
-                  click: () =>
-                    setSelectedFeature({
-                      type: 'Coastal Meteorological Station',
-                      name: `${wx.name} Weather Vector`,
-                      location: `[${wx.latitude.toFixed(3)}, ${wx.longitude.toFixed(3)}]`,
-                      metrics: {
-                        'Wind Speed': `${wx.windSpeed} km/h`,
-                        'Wind Direction': wx.windDirection,
-                        'Condition': wx.condition,
-                        'Air Temp': `${wx.temperature}°C`
-                      },
-                      reasoning: 'WRF high-resolution coastal atmospheric wind and squall model.',
-                      confidence: 0.89,
-                      mode: 'DEMO'
-                    })
-                }}
-              >
-                <Popup>
-                  <div className="text-xs text-slate-100">
-                    <strong>{wx.name}</strong>: {wx.windSpeed} km/h ({wx.condition})
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
+          {/* LAYER 5: Marine Geofences (Protected MPAs & Security Corridors) */}
+          {activeLayers.geofences &&
+            layersData?.geofences?.features?.map((gf) => {
+              // Convert GeoJSON [lng, lat] to Leaflet [lat, lng]
+              const coords = gf.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
+              return (
+                <Polygon
+                  key={gf.id}
+                  positions={coords}
+                  pathOptions={{
+                    color: gf.properties.color || '#ef4444',
+                    weight: 2,
+                    fillColor: gf.properties.color || '#ef4444',
+                    fillOpacity: 0.22,
+                    dashArray: '5, 5'
+                  }}
+                  eventHandlers={{
+                    click: () => setSelectedFeature({ type: 'GEOFENCE', data: gf.properties })
+                  }}
+                >
+                  <Popup>
+                    <div className="text-xs p-1">
+                      <strong className="text-rose-400">{gf.properties.name}</strong><br />
+                      <span className="text-[10px] text-slate-300">{gf.properties.description}</span>
+                    </div>
+                  </Popup>
+                </Polygon>
+              );
+            })}
 
-          {/* Layer 6: Wave Height Layer */}
-          {activeLayers.waveHeight &&
-            layersData?.waveHeight?.map((wh) => (
-              <CircleMarker
-                key={wh.id}
-                center={[wh.latitude, wh.longitude]}
-                radius={10}
-                pathOptions={{
-                  fillColor: wh.severity === 'HIGH' ? '#ef4444' : wh.severity === 'MODERATE' ? '#f59e0b' : '#38bdf8',
-                  fillOpacity: 0.6,
-                  color: '#ffffff',
-                  weight: 1
-                }}
-              >
-                <Popup>
-                  <div className="text-xs text-slate-100">
-                    Wave Height: <strong>{wh.label}</strong>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
+          {/* LAYER 6: Dynamic Navigational Route Line */}
+          {activeRoute && (
+            <Polyline
+              positions={activeRoute.geometry.coordinates.map(([lng, lat]) => [lat, lng])}
+              pathOptions={{
+                color: '#38bdf8',
+                weight: 3.5,
+                dashArray: '8, 6',
+                opacity: 0.95
+              }}
+            >
+              <Popup>
+                <div className="text-xs p-1 font-mono">
+                  <strong className="text-sky-400">Safest Navigational Route</strong><br />
+                  Distance: {activeRoute.properties.actualDistanceKm} km<br />
+                  Duration: {activeRoute.properties.estimatedHours} hrs @ {activeRoute.properties.vesselSpeedKnots} kts<br />
+                  <span className="text-slate-400 text-[10px]">{activeRoute.properties.hazardAvoidanceNotice}</span>
+                </div>
+              </Popup>
+            </Polyline>
+          )}
 
-          {/* Layer 7: Tide Stations */}
-          {activeLayers.tide &&
-            layersData?.tide?.map((t) => (
-              <CircleMarker
-                key={t.id}
-                center={[t.latitude, t.longitude]}
-                radius={7}
-                pathOptions={{ fillColor: '#c084fc', color: '#7e22ce', weight: 1.5, fillOpacity: 0.8 }}
-              >
-                <Popup>
-                  <div className="text-xs text-slate-100">
-                    <strong>{t.name}</strong>
-                    <div>{t.status}</div>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
+          {/* Current Selected User Coordinates Pin */}
+          <CircleMarker
+            center={mapCenter}
+            radius={8}
+            pathOptions={{
+              fillColor: '#06b6d4',
+              fillOpacity: 1,
+              color: '#ffffff',
+              weight: 2
+            }}
+          >
+            <Popup>
+              <div className="text-xs p-1">
+                <strong className="text-cyan-400">{currentRegion.name}</strong><br />
+                <span>Lat: {currentRegion.lat.toFixed(4)}, Lng: {currentRegion.lng.toFixed(4)}</span>
+              </div>
+            </Popup>
+          </CircleMarker>
         </MapContainer>
 
-        {/* Legend Overlay in Bottom-Left */}
-        <div className="absolute bottom-4 left-4 z-10 bg-ocean-950/90 border border-ocean-800 rounded-xl p-3 shadow-xl backdrop-blur-md text-[11px] text-slate-300 space-y-1.5 hidden sm:block">
-          <div className="font-bold text-slate-200 uppercase tracking-wider text-[10px] mb-1">
-            Map Overlay Legend
-          </div>
-          <div className="flex items-center space-x-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400" />
-            <span>Potential Fishing Zones (PFZs)</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-            <span>Chlorophyll Concentration (OCM-3)</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-orange-400" />
-            <span>Sea Surface Temperature (SST)</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-            <span>Marine Hazard / High Swell Zone</span>
-          </div>
+        {/* Floating Instruction Banner */}
+        <div className="absolute top-3 left-3 z-[400] bg-ocean-950/85 backdrop-blur-md border border-cyan-800/50 rounded-xl px-3 py-1.5 text-[11px] text-slate-300 font-mono flex items-center space-x-2 shadow-lg">
+          <MapPin className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+          <span>Click anywhere on sea to analyze coordinates dynamically</span>
         </div>
 
-        {/* Clickable Zone Details Panel (Sidebar Drawer) */}
+        {/* Feature Detail Drawer (Right side slide-out) */}
         {selectedFeature && (
-          <div className="absolute top-4 right-4 z-20 w-80 sm:w-96 bg-ocean-900/95 border border-cyan-800/80 rounded-2xl shadow-2xl backdrop-blur-xl p-5 text-xs text-slate-200 animate-fade-in max-h-[calc(100%-2rem)] overflow-y-auto">
-            <div className="flex items-start justify-between border-b border-ocean-800 pb-3 mb-3">
+          <div className="absolute top-3 right-3 z-[450] w-80 sm:w-96 bg-ocean-950/95 backdrop-blur-xl border border-cyan-800/60 rounded-2xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider block">
-                  {selectedFeature.type}
+                  {selectedFeature.type.replace('_', ' ')}
                 </span>
-                <h3 className="text-sm font-bold text-slate-100 mt-0.5">{selectedFeature.name}</h3>
-                <div className="text-[11px] text-slate-400 font-mono mt-0.5">{selectedFeature.location}</div>
+                <h4 className="text-base font-bold text-slate-100 font-mono">
+                  {selectedFeature.data.name || selectedFeature.data.label || 'Marine Feature'}
+                </h4>
               </div>
               <button
                 onClick={() => setSelectedFeature(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-ocean-800 transition-colors"
+                className="p-1 rounded-lg hover:bg-ocean-800 text-slate-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Badges */}
-            <div className="flex items-center space-x-2 mb-3">
-              {selectedFeature.suitability && (
-                <span className="px-2.5 py-0.5 rounded-full font-mono text-xs font-bold bg-teal-500/20 text-teal-300 border border-teal-500/40">
-                  Suitability: {selectedFeature.suitability}
-                </span>
-              )}
-              {selectedFeature.confidence && (
-                <ConfidenceBadge confidence={selectedFeature.confidence} />
-              )}
-              {selectedFeature.riskLevel && (
-                <RiskBadge riskLevel={selectedFeature.riskLevel} />
-              )}
-            </div>
-
-            {/* Metrics Grid */}
-            <div className="bg-ocean-950/80 border border-ocean-800 rounded-xl p-3 space-y-1.5 font-mono text-[11px] mb-3">
-              {Object.entries(selectedFeature.metrics || {}).map(([k, v]) => (
-                <div key={k} className="flex justify-between items-center py-0.5 border-b border-ocean-900 last:border-none">
-                  <span className="text-slate-400">{k}:</span>
-                  <span className="text-cyan-300 font-semibold truncate max-w-[180px]">{v}</span>
+            {/* PFZ Detail */}
+            {selectedFeature.type === 'PFZ' && (
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center space-x-2">
+                  <span className="text-slate-400">Suitability:</span>
+                  <ConfidenceBadge level={selectedFeature.data.suitability} />
+                  <span className="text-slate-400 font-mono">({Math.round(selectedFeature.data.confidence * 100)}% conf)</span>
                 </div>
-              ))}
-            </div>
+                <div className="p-3 bg-ocean-900 rounded-xl border border-ocean-800 text-slate-300 space-y-1">
+                  <div><strong>SST:</strong> {selectedFeature.data.indicators?.sst || 27.8}°C</div>
+                  <div><strong>Chlorophyll:</strong> {selectedFeature.data.indicators?.chlorophyll || 1.9} mg/m³</div>
+                  <div><strong>Target Species:</strong> {selectedFeature.data.targetSpecies?.join(', ')}</div>
+                  <div className="text-[10px] text-cyan-400 pt-1 font-mono">{selectedFeature.data.disclaimer}</div>
+                </div>
 
-            {/* Reasoning Explanation */}
-            {selectedFeature.reasoning && (
-              <div className="mb-3">
-                <span className="text-[11px] font-semibold text-slate-300 block mb-1">
-                  Reasoning & Marine Evidence:
-                </span>
-                <p className="text-slate-400 leading-relaxed bg-ocean-950/40 p-2.5 rounded-lg border border-ocean-800/80">
-                  {selectedFeature.reasoning}
-                </p>
+                {/* Calculate Dynamic Route Button */}
+                <button
+                  onClick={() => handleCalculateRouteToZone(selectedFeature.data)}
+                  disabled={calculatingRoute}
+                  className="w-full py-2 bg-gradient-to-r from-cyan-500 to-teal-500 text-ocean-950 font-bold rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow"
+                >
+                  <Navigation className="w-3.5 h-3.5" />
+                  <span>{calculatingRoute ? 'Calculating Safest Track...' : 'Plot Safest Navigational Route'}</span>
+                </button>
               </div>
             )}
 
-            <div className="pt-2 border-t border-ocean-800 flex items-center justify-between text-[11px] text-slate-400">
-              <span className="font-mono text-emerald-400">Mode: {selectedFeature.mode}</span>
-              <span className="text-slate-500">Simulated Dataset</span>
-            </div>
+            {/* Geofence Detail */}
+            {selectedFeature.type === 'GEOFENCE' && (
+              <div className="space-y-2 text-xs">
+                <div className="p-2.5 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200">
+                  <strong>Restriction:</strong> {selectedFeature.data.restrictionLevel}
+                </div>
+                <p className="text-slate-300 text-xs leading-relaxed">{selectedFeature.data.description}</p>
+                <div className="text-[10px] font-mono text-slate-500">Source: MoEFCC / Directorate General of Shipping</div>
+              </div>
+            )}
+
+            {/* SST / Chlorophyll Detail */}
+            {(selectedFeature.type === 'SST' || selectedFeature.type === 'CHLOROPHYLL') && (
+              <div className="space-y-2 text-xs">
+                <div className="p-3 bg-ocean-900 rounded-xl border border-ocean-800 text-slate-200">
+                  <div><strong>Value:</strong> {selectedFeature.data.label}</div>
+                  <div><strong>Coordinates:</strong> {selectedFeature.data.latitude?.toFixed(4)}, {selectedFeature.data.longitude?.toFixed(4)}</div>
+                  <div className="text-[10px] text-slate-400 mt-1">Source: {selectedFeature.data.source || 'Operational Feed'}</div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

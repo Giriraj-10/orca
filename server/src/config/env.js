@@ -10,7 +10,9 @@ module.exports = {
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/orca',
   JWT_SECRET: process.env.JWT_SECRET || 'orca_jwt_secret_dev_key_secure_marine_agents_9921',
-  DATA_MODE: (process.env.DATA_MODE || 'demo').toUpperCase(),
+  DATA_MODE: (process.env.DATA_MODE || 'hybrid').toUpperCase(),
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
-  NODE_ENV: process.env.NODE_ENV || 'development'
+  NODE_ENV: process.env.NODE_ENV || 'development',
+  CACHE_TTL_SECONDS: parseInt(process.env.CACHE_TTL_SECONDS, 10) || 900,
+  API_TIMEOUT_MS: parseInt(process.env.API_TIMEOUT_MS, 10) || 10000
 };

@@ -141,10 +141,10 @@ const AdminStatusPage = () => {
             <Zap className="w-4 h-4 text-amber-400" />
           </div>
           <div className="text-lg font-bold font-mono text-emerald-400">
-            {telemetry?.dataMode || 'DEMO (Simulated)'}
+            {telemetry?.dataMode || 'HYBRID (Live First)'}
           </div>
           <div className="text-[11px] text-slate-400 font-mono">
-            Zero-Crash Offline Resilient
+            Live API → Cache → Resilient Fallback
           </div>
         </div>
       </div>

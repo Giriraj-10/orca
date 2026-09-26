@@ -17,7 +17,9 @@ import {
   Layers,
   Thermometer,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  Navigation,
+  Radio
 } from 'lucide-react';
 import { aiService } from '../services/api';
 import { useLocation } from '../context/LocationContext';
@@ -31,15 +33,16 @@ import DisclaimerBanner from '../components/common/DisclaimerBanner';
 const suggestedPrompts = [
   'Find potential fishing zones near Mumbai.',
   'Is it safe to go to sea tomorrow morning?',
-  'Show me areas with high chlorophyll concentration.',
+  'Find the safest route to the nearest PFZ.',
+  'कल समुद्र में जाना सुरक्षित है? (Is it safe tomorrow?)',
   'Compare Mumbai and Goa marine conditions.',
-  'What is the current SST and wave condition here?'
+  'What is the current SST and wave swell here?'
 ];
 
 const AssistantPage = () => {
   const routerLocation = useRouterLocation();
   const navigate = useNavigate();
-  const { currentRegion } = useLocation();
+  const { currentRegion, timeFilter, setTimeFilter, targetDate } = useLocation();
   const { user } = useAuth();
 
   const [inputMessage, setInputMessage] = useState('');
@@ -48,7 +51,7 @@ const AssistantPage = () => {
       id: 'welcome_1',
       sender: 'orca',
       query: null,
-      answer: `Hello ${user?.name || 'Captain'}. I am ORCA, your collaborative marine intelligence orchestrator. I coordinate 8 autonomous agents analyzing Earth Observation radiometry, sea surface temperature, and weather models to answer your maritime questions. What would you like to explore today?`,
+      answer: `Hello ${user?.name || 'Captain'}. I am ORCA, your collaborative marine intelligence orchestrator. I coordinate 8 autonomous agents connecting directly to live Earth Observation feeds, Open-Meteo marine models, and IMD forecasts to answer your maritime questions with grounded evidence. What would you like to explore today?`,
       intent: 'GREETING',
       timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
       agentsUsed: [],
@@ -69,7 +72,6 @@ const AssistantPage = () => {
     scrollToBottom();
   }, [messages, loading]);
 
-  // Handle query passed from dashboard quick search
   useEffect(() => {
     if (routerLocation.state?.initialQuery) {
       handleSend(routerLocation.state.initialQuery);
@@ -99,7 +101,7 @@ const AssistantPage = () => {
     setCurrentAgentsUsed([]);
 
     try {
-      const response = await aiService.query(text, currentRegion.lat, currentRegion.lng);
+      const response = await aiService.query(text, currentRegion.lat, currentRegion.lng, null, targetDate);
 
       setCurrentExecutionSteps(response.executionSteps || []);
       setCurrentAgentsUsed(response.agentsUsed || []);
@@ -122,8 +124,10 @@ const AssistantPage = () => {
           evidence: response.evidence || [],
           agentsUsed: response.agentsUsed || [],
           executionSteps: response.executionSteps || [],
+          route: response.route,
           provider: response.provider,
           dataMode: response.dataMode,
+          isLive: response.isLive,
           timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
         }
       ]);
@@ -146,7 +150,7 @@ const AssistantPage = () => {
   return (
     <div className="h-[calc(100vh-6.5rem)] flex flex-col rounded-2xl overflow-hidden border border-ocean-800 shadow-2xl bg-ocean-950">
       {/* Top Header Bar */}
-      <div className="bg-ocean-900/95 border-b border-ocean-800 px-5 py-3 flex items-center justify-between backdrop-blur-md shrink-0">
+      <div className="bg-ocean-900/95 border-b border-ocean-800 px-5 py-3 flex flex-wrap items-center justify-between gap-3 backdrop-blur-md shrink-0">
         <div className="flex items-center space-x-3">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-600 to-teal-500 flex items-center justify-center text-white shadow-md">
             <Bot className="w-5 h-5" />
@@ -159,84 +163,120 @@ const AssistantPage = () => {
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             </div>
             <p className="text-[11px] text-cyan-400 font-mono">
-              Grounded on {currentRegion.name} ({currentRegion.sea})
+              Grounded on {currentRegion.name} ({currentRegion.lat.toFixed(2)}°N, {currentRegion.lng.toFixed(2)}°E)
             </p>
           </div>
         </div>
 
-        <button
-          onClick={() =>
-            setMessages([
-              {
-                id: 'welcome_reset',
-                sender: 'orca',
-                answer: 'Session history reset. What marine question can we analyze?',
-                timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-              }
-            ])
-          }
-          className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-ocean-800/80 hover:bg-ocean-750 text-slate-300 hover:text-white text-xs transition-colors"
-          title="Clear Conversation History"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Reset</span>
-        </button>
+        {/* Time Selector & Reset Session */}
+        <div className="flex items-center space-x-2">
+          <div className="hidden sm:flex items-center space-x-1 bg-ocean-950 border border-ocean-800 rounded-lg p-0.5">
+            {[
+              { id: 'now', label: 'Now' },
+              { id: 'tomorrow_morning', label: 'Tomorrow AM' }
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTimeFilter(t.id)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono ${
+                  timeFilter === t.id
+                    ? 'bg-cyan-500 text-ocean-950 font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={() =>
+              setMessages([
+                {
+                  id: 'welcome_reset',
+                  sender: 'orca',
+                  answer: 'Session history reset. What marine question can we analyze?',
+                  timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+                }
+              ])
+            }
+            className="p-1.5 rounded-lg bg-ocean-950 border border-ocean-800 text-slate-400 hover:text-cyan-300 hover:border-cyan-700 transition-colors"
+            title="Reset Conversation"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
-      {/* Messages Scroll Area */}
+      {/* Main Message Stream */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
         {messages.map((msg) => (
-          <div key={msg.id} className="space-y-3">
-            {/* User Message */}
-            {msg.sender === 'user' ? (
+          <div key={msg.id} className="space-y-4">
+            {/* User Bubble */}
+            {msg.sender === 'user' && (
               <div className="flex items-start justify-end space-x-3">
-                <div className="max-w-2xl bg-cyan-950/80 border border-cyan-800/70 rounded-2xl rounded-tr-none p-4 text-xs sm:text-sm text-cyan-100 shadow-md">
-                  <p className="leading-relaxed">{msg.text}</p>
-                  <div className="text-[10px] text-cyan-400/70 font-mono mt-1 text-right">
+                <div className="bg-gradient-to-r from-cyan-600 to-cyan-500 text-ocean-950 rounded-2xl rounded-tr-none px-4 py-3 max-w-xl shadow-lg">
+                  <p className="text-xs sm:text-sm font-semibold">{msg.text}</p>
+                  <span className="text-[10px] text-ocean-950/70 font-mono mt-1 block text-right">
                     {msg.timestamp}
-                  </div>
+                  </span>
                 </div>
-                <div className="w-8 h-8 rounded-lg bg-cyan-600/30 border border-cyan-500/40 flex items-center justify-center text-cyan-300 shrink-0">
+                <div className="w-8 h-8 rounded-lg bg-cyan-700 text-white flex items-center justify-center shrink-0 mt-1 shadow-md">
                   <User className="w-4 h-4" />
                 </div>
               </div>
-            ) : (
-              /* ORCA Agent Response Message */
+            )}
+
+            {/* ORCA Agent Bubble */}
+            {msg.sender === 'orca' && (
               <div className="flex items-start space-x-3">
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-teal-500 flex items-center justify-center text-white shrink-0 mt-1 shadow-md">
                   <Bot className="w-4 h-4" />
                 </div>
 
-                <div className="flex-1 max-w-4xl space-y-3">
-                  {/* Agent Execution Visualizer Component for this answer */}
-                  {msg.agentsUsed && msg.agentsUsed.length > 0 && (
-                    <AgentExecutionVisualizer
-                      agentsUsed={msg.agentsUsed}
-                      executionSteps={msg.executionSteps}
-                    />
-                  )}
-
-                  {/* Main Bubble Card */}
-                  <div className="bg-ocean-900/80 border border-ocean-800 rounded-2xl rounded-tl-none p-5 text-xs sm:text-sm text-slate-200 shadow-xl backdrop-blur-md">
+                <div className="flex-1 max-w-3xl space-y-4">
+                  <div className="bg-ocean-900/90 border border-ocean-800 rounded-2xl rounded-tl-none p-4 sm:p-5 shadow-xl space-y-3">
                     {/* Header Badges */}
                     {msg.intent && msg.intent !== 'GREETING' && (
-                      <div className="flex flex-wrap items-center gap-2 mb-3 pb-3 border-b border-ocean-800">
-                        <span className="font-mono text-[11px] px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-800/80 text-cyan-300 font-semibold">
-                          Intent: {msg.intent}
-                        </span>
-                        {msg.confidence !== undefined && (
-                          <ConfidenceBadge confidence={msg.confidence} level={msg.confidenceLevel} />
-                        )}
-                        {msg.riskLevel && (
-                          <RiskBadge riskLevel={msg.riskLevel} />
-                        )}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-ocean-800">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
+                            Intent: {msg.intent}
+                          </span>
+                          {msg.confidenceLevel && (
+                            <ConfidenceBadge level={msg.confidenceLevel} score={msg.confidence} />
+                          )}
+                        </div>
+                        {msg.riskLevel && <RiskBadge level={msg.riskLevel} />}
                       </div>
                     )}
 
-                    {/* Narrative Answer Text */}
-                    <div className="leading-relaxed text-slate-200 space-y-2 whitespace-pre-line">
+                    {/* Main Synthesized Answer */}
+                    <div className="text-xs sm:text-sm text-slate-200 leading-relaxed font-sans whitespace-pre-line">
                       {msg.answer}
                     </div>
+
+                    {/* Dynamic Route Card if generated */}
+                    {msg.route && (
+                      <div className="p-3.5 rounded-xl bg-cyan-950/60 border border-cyan-800 flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-bold text-cyan-300 flex items-center space-x-1.5">
+                            <Navigation className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Dynamic Hazard-Avoidance Navigational Route Plotted</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            Distance: {msg.route.properties.actualDistanceKm} km | Est: {msg.route.properties.estimatedHours} hrs @ {msg.route.properties.vesselSpeedKnots} kts
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => navigate('/map')}
+                          className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-ocean-950 text-xs font-bold rounded-lg transition-colors flex items-center space-x-1"
+                        >
+                          <span>View Track</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
 
                     {/* Candidate Fishing Zones Cards if any */}
                     {msg.locations && msg.locations.length > 0 && (
@@ -304,7 +344,7 @@ const AssistantPage = () => {
                       </div>
                     )}
 
-                    {/* Corroborating Evidence Table Component */}
+                    {/* Grounded Evidence Table Component */}
                     {msg.evidence && msg.evidence.length > 0 && (
                       <EvidenceTable evidence={msg.evidence} />
                     )}
@@ -314,7 +354,9 @@ const AssistantPage = () => {
                       <div className="flex items-center space-x-2">
                         <span>Provider: {msg.provider || 'ORCA Multi-Agent Hybrid'}</span>
                         <span>•</span>
-                        <span className="text-emerald-400 font-semibold">Mode: {msg.dataMode || 'DEMO'}</span>
+                        <span className={msg.isLive ? 'text-emerald-400 font-semibold' : 'text-amber-400'}>
+                          {msg.isLive ? 'LIVE DATA GROUNDED' : 'HYBRID / DEMO'}
+                        </span>
                       </div>
                       <div>{msg.timestamp}</div>
                     </div>
@@ -334,62 +376,60 @@ const AssistantPage = () => {
             <div className="bg-ocean-900/80 border border-ocean-800 rounded-2xl rounded-tl-none p-4 max-w-md shadow-xl">
               <div className="flex items-center space-x-2 text-xs font-semibold text-cyan-300 mb-2">
                 <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" />
-                <span>Collaborative Agents Reasoning in Progress...</span>
+                <span>Collaborative Agents Querying Live APIs & Reasoning...</span>
               </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Invoking Weather Agent, Ocean Hydrodynamic Agent, and Earth Observation Chlorophyll Radiometer...
+              <p className="text-[11px] text-slate-400 leading-relaxed font-mono">
+                Invoking Weather Tool (Open-Meteo/IMD), Marine Tool, and Satellite Radiometer...
               </p>
-              <div className="mt-3 w-full bg-ocean-950 rounded-full h-1.5 overflow-hidden">
-                <div className="bg-gradient-to-r from-cyan-500 to-teal-400 h-full w-2/3 animate-pulse" />
-              </div>
             </div>
+          </div>
+        )}
+
+        {/* Live Execution Visualizer */}
+        {currentExecutionSteps.length > 0 && (
+          <div className="max-w-3xl ml-11">
+            <AgentExecutionVisualizer steps={currentExecutionSteps} agents={currentAgentsUsed} />
           </div>
         )}
 
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Suggested Prompts Pills & Input Bar */}
-      <div className="bg-ocean-900/95 border-t border-ocean-800 p-3 sm:p-4 backdrop-blur-md shrink-0 space-y-3">
-        {/* Suggested Queries */}
-        <div className="flex items-center space-x-2 overflow-x-auto pb-1 text-xs">
-          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider shrink-0 font-mono">
-            Suggested:
-          </span>
-          {suggestedPrompts.map((prompt, idx) => (
-            <button
-              key={idx}
-              onClick={() => handleSend(prompt)}
-              className="px-2.5 py-1 rounded-full bg-ocean-950/80 hover:bg-ocean-800 border border-ocean-700/80 text-slate-300 hover:text-cyan-200 transition-colors whitespace-nowrap text-[11px]"
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
-
-        {/* Input Form */}
-        <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="flex items-center space-x-2">
-          <div className="flex-1 relative">
-            <input
-              type="text"
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              placeholder={`Ask a question for ${currentRegion.name} (e.g. Find fishing zones, assess safety)...`}
-              disabled={loading}
-              className="w-full px-4 py-3 bg-ocean-950/90 border border-ocean-700 rounded-xl text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition-colors shadow-inner"
-            />
-          </div>
-
+      {/* Suggested Prompt Chips */}
+      <div className="bg-ocean-900/60 border-t border-ocean-800 px-4 py-2 flex items-center space-x-2 overflow-x-auto shrink-0">
+        <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+        <span className="text-[10px] font-mono text-slate-400 shrink-0 uppercase">Suggested Prompts:</span>
+        {suggestedPrompts.map((prompt, idx) => (
           <button
-            type="submit"
-            disabled={loading || !inputMessage.trim()}
-            className="px-4 sm:px-6 py-3 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-ocean-950 font-bold rounded-xl text-xs sm:text-sm shadow-lg shadow-cyan-500/20 transition-all flex items-center space-x-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            key={idx}
+            onClick={() => handleSend(prompt)}
+            disabled={loading}
+            className="px-2.5 py-1 bg-ocean-950 hover:bg-ocean-800 text-slate-300 hover:text-cyan-300 text-xs rounded-lg border border-ocean-800 whitespace-nowrap transition-colors"
           >
-            <span>Ask</span>
-            <Send className="w-4 h-4" />
+            {prompt}
           </button>
-        </form>
+        ))}
       </div>
+
+      {/* Input Message Form */}
+      <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="bg-ocean-900 border-t border-ocean-800 p-3 sm:p-4 flex items-center space-x-2 shrink-0">
+        <input
+          type="text"
+          value={inputMessage}
+          onChange={(e) => setInputMessage(e.target.value)}
+          placeholder={`Ask ORCA AI for ${currentRegion.name} (e.g. Find safest route, evaluate safety tomorrow)...`}
+          disabled={loading}
+          className="flex-1 bg-ocean-950 border border-ocean-700/80 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors shadow-inner"
+        />
+        <button
+          type="submit"
+          disabled={!inputMessage.trim() || loading}
+          className="px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-ocean-950 font-bold rounded-xl text-xs sm:text-sm transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1.5"
+        >
+          <span>Send</span>
+          <Send className="w-3.5 h-3.5" />
+        </button>
+      </form>
     </div>
   );
 };

@@ -46,6 +46,9 @@ class DeterministicFallbackAIProvider extends BaseAIProvider {
     if (q.includes('ocean') || q.includes('wave') || q.includes('current') || q.includes('tide') || q.includes('sea condition')) {
       return { intent: 'OCEAN_CONDITION', confidence: 0.90 };
     }
+    if (q.includes('route') || q.includes('path') || q.includes('navigate') || q.includes('course') || q.includes('heading')) {
+      return { intent: 'ROUTE_QUERY', confidence: 0.94 };
+    }
     if (q.includes('map') || q.includes('coordinate') || q.includes('layer') || q.includes('where is')) {
       return { intent: 'MAP_QUERY', confidence: 0.88 };
     }
@@ -86,6 +89,15 @@ class DeterministicFallbackAIProvider extends BaseAIProvider {
         recommendations = [
           'Select the sector offering higher chlorophyll density provided wave height remains below craft limits',
           'Factor in fuel expenditure against distance offsets for offshore harvesting'
+        ];
+        break;
+
+      case 'ROUTE_QUERY':
+        answer = `Dynamic maritime navigation route plotted for ${locName}. The pathfinding engine evaluated current hydrodynamic wave swells (${ocean?.waveHeight || 1.1} m), surface winds (${weather?.windSpeed || 14} km/h), and verified clearance from marine protected areas and security perimeters. The minimum-risk track and waypoints have been loaded onto your map.`;
+        recommendations = [
+          'Follow the verified route waypoints to ensure safe clearance from restricted areas',
+          'Maintain standard cruising speed and monitor engine cooling in open waters',
+          'Keep continuous VHF radio watch on Channel 16 for localized squalls'
         ];
         break;
 

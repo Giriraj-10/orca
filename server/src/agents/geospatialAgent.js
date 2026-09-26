@@ -1,83 +1,42 @@
 const logger = require('../utils/logger');
 const COASTAL_REGIONS = require('../data/coastalRegions');
 const { calculateDistance, findNearest } = require('../utils/geoUtils');
+const toolRegistry = require('../tools/ToolRegistry');
 
 class GeospatialAgent {
   constructor() {
     this.name = 'Geospatial Agent';
-    this.role = 'Spatial Indexing & Boundary Reasoning';
+    this.role = 'Spatial Indexing, Geocoding & Boundary Reasoning';
   }
 
-  /**
-   * Find nearest coastal reference region
-   */
   findNearestRegion(latitude, longitude) {
     return findNearest(latitude, longitude, COASTAL_REGIONS);
   }
 
-  /**
-   * Resolve named location query to coordinates
-   */
-  resolveLocationName(query) {
+  async resolveLocationName(query) {
     if (!query) return null;
-    const q = query.toLowerCase();
-
-    for (const region of COASTAL_REGIONS) {
-      if (
-        q.includes(region.id) ||
-        q.includes(region.name.toLowerCase()) ||
-        q.includes(region.state.toLowerCase()) ||
-        q.includes(region.sea.toLowerCase())
-      ) {
-        return region;
+    try {
+      const geoResult = await toolRegistry.executeTool('geocoding_tool', { query });
+      if (geoResult && geoResult.latitude && geoResult.longitude) {
+        return {
+          name: geoResult.name,
+          fullName: geoResult.fullName,
+          center: { latitude: geoResult.latitude, longitude: geoResult.longitude },
+          source: geoResult.source
+        };
       }
+    } catch (err) {
+      logger.warn(`[GeospatialAgent] Geocode tool error: ${err.message}`);
     }
 
-    // Default aliases
-    if (q.includes('bombay') || q.includes('mumbai')) return COASTAL_REGIONS.find(r => r.id === 'mumbai');
-    if (q.includes('panaji') || q.includes('goa')) return COASTAL_REGIONS.find(r => r.id === 'goa');
-    if (q.includes('cochin') || q.includes('kochi') || q.includes('kerala')) return COASTAL_REGIONS.find(r => r.id === 'kochi');
-    if (q.includes('madras') || q.includes('chennai') || q.includes('tamil nadu')) return COASTAL_REGIONS.find(r => r.id === 'chennai');
-    if (q.includes('vizag') || q.includes('visakhapatnam') || q.includes('andhra')) return COASTAL_REGIONS.find(r => r.id === 'vizag');
-    if (q.includes('puri') || q.includes('paradip') || q.includes('odisha') || q.includes('orissa')) return COASTAL_REGIONS.find(r => r.id === 'odisha');
-    if (q.includes('veraval') || q.includes('gujarat') || q.includes('porbandar')) return COASTAL_REGIONS.find(r => r.id === 'gujarat');
-    if (q.includes('andaman') || q.includes('port blair') || q.includes('nicobar')) return COASTAL_REGIONS.find(r => r.id === 'andaman');
-
-    return null;
-  }
-
-  /**
-   * Compare two marine locations
-   */
-  compareLocations(locA, locB) {
-    const dist = calculateDistance(
-      locA.center.latitude, locA.center.longitude,
-      locB.center.latitude, locB.center.longitude
-    );
-
-    return {
-      distanceBetweenKm: dist,
-      locationA: {
-        name: locA.name,
-        state: locA.state,
-        sea: locA.sea,
-        coordinates: locA.center,
-        baseline: locA.baseline
-      },
-      locationB: {
-        name: locB.name,
-        state: locB.state,
-        sea: locB.sea,
-        coordinates: locB.center,
-        baseline: locB.baseline
-      },
-      comparisonDeltas: {
-        sstDelta: Number((locA.baseline.sst - locB.baseline.sst).toFixed(1)),
-        chlorophyllDelta: Number((locA.baseline.chlorophyll - locB.baseline.chlorophyll).toFixed(2)),
-        waveDelta: Number((locA.baseline.waveHeight - locB.baseline.waveHeight).toFixed(1)),
-        windDelta: Number((locA.baseline.windSpeed - locB.baseline.windSpeed).toFixed(1))
+    // Baseline keyword alias fallback
+    const q = query.toLowerCase();
+    for (const region of COASTAL_REGIONS) {
+      if (q.includes(region.id) || q.includes(region.name.toLowerCase())) {
+        return { name: region.name, center: region.center, source: 'Coastal Registry' };
       }
-    };
+    }
+    return null;
   }
 
   async execute(latitude, longitude, queryText = '') {
@@ -85,12 +44,19 @@ class GeospatialAgent {
     logger.agent(this.name, `Performing spatial resolution for query "${queryText}" [${latitude}, ${longitude}]`);
 
     try {
-      const resolvedFromQuery = this.resolveLocationName(queryText);
-      const targetCoords = resolvedFromQuery
-        ? { latitude: resolvedFromQuery.center.latitude, longitude: resolvedFromQuery.center.longitude }
-        : { latitude, longitude };
+      let resolvedLoc = null;
+      if (queryText) {
+        resolvedLoc = await this.resolveLocationName(queryText);
+      }
+
+      const targetCoords = resolvedLoc
+        ? { latitude: resolvedLoc.center.latitude, longitude: resolvedLoc.center.longitude }
+        : { latitude: parseFloat(latitude), longitude: parseFloat(longitude) };
 
       const nearestRegion = this.findNearestRegion(targetCoords.latitude, targetCoords.longitude);
+
+      // Check geofence
+      const geofenceStatus = await toolRegistry.executeTool('geofence_tool', targetCoords);
 
       const latencyMs = Date.now() - startTime;
 
@@ -100,11 +66,12 @@ class GeospatialAgent {
         role: this.role,
         latencyMs,
         data: {
-          resolvedLocation: resolvedFromQuery ? resolvedFromQuery.name : nearestRegion.name,
+          resolvedLocation: resolvedLoc ? resolvedLoc.name : nearestRegion.name,
           targetCoordinates: targetCoords,
           nearestRegion: nearestRegion,
           distanceToPortKm: nearestRegion.distanceKm || 0,
           seaBasin: nearestRegion.sea,
+          geofenceStatus,
           allRegions: COASTAL_REGIONS.map(r => ({ id: r.id, name: r.name, center: r.center }))
         }
       };

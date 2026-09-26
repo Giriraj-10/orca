@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
+import { geoService } from '../services/api';
 
 export const COASTAL_REGIONS = [
   { id: 'mumbai', name: 'Mumbai Offshore', state: 'Maharashtra', lat: 18.922, lng: 72.8347, sea: 'Arabian Sea' },
@@ -17,6 +18,37 @@ export const LocationProvider = ({ children }) => {
   const [currentRegion, setCurrentRegion] = useState(COASTAL_REGIONS[0]); // Mumbai default
   const [isGpsActive, setIsGpsActive] = useState(false);
   const [gpsError, setGpsError] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+
+  // Time state: 'now' | 'today' | 'tomorrow_morning' | 'tomorrow_afternoon' | 'custom'
+  const [timeFilter, setTimeFilterState] = useState('now');
+  const [customDate, setCustomDate] = useState(new Date().toISOString());
+
+  const getTargetDate = (filter = timeFilter) => {
+    const now = new Date();
+    if (filter === 'now') return now.toISOString();
+    if (filter === 'today') {
+      now.setHours(14, 0, 0, 0);
+      return now.toISOString();
+    }
+    if (filter === 'tomorrow_morning') {
+      const tomorrow = new Date(now.getTime() + 24 * 3600 * 1000);
+      tomorrow.setHours(6, 0, 0, 0); // 06:00 AM
+      return tomorrow.toISOString();
+    }
+    if (filter === 'tomorrow_afternoon') {
+      const tomorrow = new Date(now.getTime() + 24 * 3600 * 1000);
+      tomorrow.setHours(14, 0, 0, 0); // 02:00 PM
+      return tomorrow.toISOString();
+    }
+    return customDate;
+  };
+
+  const setTimeFilter = (filter, customVal = null) => {
+    setTimeFilterState(filter);
+    if (customVal) setCustomDate(customVal);
+  };
 
   const selectRegionById = (regionId) => {
     const found = COASTAL_REGIONS.find((r) => r.id === regionId);
@@ -24,6 +56,7 @@ export const LocationProvider = ({ children }) => {
       setCurrentRegion(found);
       setIsGpsActive(false);
       setGpsError(null);
+      setSearchError(null);
     }
   };
 
@@ -32,10 +65,33 @@ export const LocationProvider = ({ children }) => {
       id: 'custom_' + Date.now(),
       name: name || 'Selected Sector',
       state: 'Maritime Sector',
-      lat: Number(lat),
-      lng: Number(lng),
+      lat: Number(parseFloat(lat).toFixed(4)),
+      lng: Number(parseFloat(lng).toFixed(4)),
       sea: 'Indian Ocean'
     });
+    setIsGpsActive(false);
+    setSearchError(null);
+  };
+
+  const searchAndSetLocation = async (queryText) => {
+    if (!queryText || !queryText.trim()) return false;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      const res = await geoService.searchLocation(queryText.trim());
+      if (res && res.data && res.data.latitude && res.data.longitude) {
+        setCustomLocation(res.data.name || queryText, res.data.latitude, res.data.longitude);
+        return true;
+      } else {
+        setSearchError(`No coastal location found for "${queryText}"`);
+        return false;
+      }
+    } catch (err) {
+      setSearchError(err.message || 'Geocoding request failed');
+      return false;
+    } finally {
+      setSearching(false);
+    }
   };
 
   const useBrowserGeolocation = () => {
@@ -57,10 +113,11 @@ export const LocationProvider = ({ children }) => {
         });
         setIsGpsActive(true);
         setGpsError(null);
+        setSearchError(null);
       },
       (err) => {
         console.warn('Geolocation failed:', err.message);
-        setGpsError('GPS access declined — continuing with default coastal station');
+        setGpsError('GPS access declined — continuing with current coastal station');
         setIsGpsActive(false);
       },
       { timeout: 8000 }
@@ -74,9 +131,16 @@ export const LocationProvider = ({ children }) => {
         allRegions: COASTAL_REGIONS,
         selectRegionById,
         setCustomLocation,
+        searchAndSetLocation,
         useBrowserGeolocation,
         isGpsActive,
-        gpsError
+        gpsError,
+        searching,
+        searchError,
+        timeFilter,
+        setTimeFilter,
+        targetDate: getTargetDate(),
+        getTargetDate
       }}
     >
       {children}

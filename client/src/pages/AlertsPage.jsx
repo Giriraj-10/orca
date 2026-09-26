@@ -275,9 +275,14 @@ const AlertsPage = () => {
                   {al.message}
                 </p>
 
-                <div className="mt-3 pt-3 border-t border-ocean-800/60 pl-12 flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                  <span>{al.advisoryDisclaimer}</span>
-                  <span className="text-emerald-400">STATUS: ACTIVE</span>
+                <div className="mt-3 pt-3 border-t border-ocean-800/60 pl-12 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 font-mono">
+                  <span>Source: <strong className="text-amber-300">{al.source || 'IMD / INCOIS Coastal Network'}</strong></span>
+                  <div className="flex items-center space-x-2">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${al.isLive ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-ocean-950 text-cyan-400 border border-ocean-800'}`}>
+                      {al.dataMode ? al.dataMode.toUpperCase() : (al.isLive ? 'LIVE' : 'HYBRID')}
+                    </span>
+                    <span className="text-emerald-400 font-bold">● ACTIVE</span>
+                  </div>
                 </div>
               </div>
             );

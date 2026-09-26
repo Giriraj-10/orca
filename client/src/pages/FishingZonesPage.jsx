@@ -38,7 +38,7 @@ const FishingZonesPage = () => {
     const fetchZones = async () => {
       setLoading(true);
       try {
-        const res = await fishingService.getZones();
+        const res = await fishingService.getZones(currentRegion?.lat, currentRegion?.lng);
         setZones(res.data || []);
       } catch (err) {
         console.warn('Fishing zones fetch error:', err.message);
@@ -47,7 +47,7 @@ const FishingZonesPage = () => {
       }
     };
     fetchZones();
-  }, []);
+  }, [currentRegion]);
 
   const handleAnalyzeCustom = async (e) => {
     e.preventDefault();
@@ -212,16 +212,36 @@ const FishingZonesPage = () => {
                 )}
               </div>
 
-              {/* Action Button */}
-              <div className="pt-3 border-t border-ocean-800 flex items-center justify-between">
-                <span className="text-[10px] text-emerald-400 font-mono">Mode: DEMO</span>
-                <button
-                  onClick={() => navigate('/map')}
-                  className="px-3 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 rounded-lg text-xs font-semibold flex items-center space-x-1 transition-colors"
-                >
-                  <span>Locate on Map</span>
-                  <ExternalLink className="w-3 h-3" />
-                </button>
+              {/* Attribution and Action */}
+              <div className="pt-3 border-t border-ocean-800 space-y-2">
+                <div className="flex flex-wrap items-center justify-between text-[10px] font-mono text-slate-400 gap-1">
+                  <span>Source: <strong className="text-teal-300">{z.source || 'INCOIS / EO Derived'}</strong></span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${z.isLive ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-800'}`}>
+                    {z.dataMode ? z.dataMode.toUpperCase() : (z.isLive ? 'LIVE' : 'HYBRID')}
+                  </span>
+                </div>
+                {z.isDerived && (
+                  <div className="text-[10px] font-mono text-amber-300/90 bg-amber-950/40 px-2 py-1 rounded border border-amber-800/40">
+                    ⚠ ORCA DERIVED PFZ SUITABILITY — NOT OFFICIAL INCOIS PFZ ADVISORY
+                  </div>
+                )}
+                {z.advisoryDate && (
+                  <div className="text-[10px] font-mono text-slate-400">
+                    Advisory Date: {new Date(z.advisoryDate).toLocaleDateString()} | Sector: {z.sector || 'Regional Shelf'}
+                  </div>
+                )}
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    Retrieved: {z.retrievedAt ? new Date(z.retrievedAt).toLocaleTimeString() : 'Live Feed'}
+                  </span>
+                  <button
+                    onClick={() => navigate('/map')}
+                    className="px-3 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 rounded-lg text-xs font-semibold flex items-center space-x-1 transition-colors"
+                  >
+                    <span>Locate on Map</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </button>
+                </div>
               </div>
             </div>
           ))}

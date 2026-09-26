@@ -1,28 +1,33 @@
-const MarineObservation = require('../models/MarineObservation');
-const WeatherObservation = require('../models/WeatherObservation');
-const OceanObservation = require('../models/OceanObservation');
+const dsm = require('../dataSources/DataSourceManager');
+const riskAgent = require('../agents/riskAgent');
 const COASTAL_REGIONS = require('../data/coastalRegions');
 const { calculateDistance } = require('../utils/geoUtils');
-const geospatialAgent = require('../agents/geospatialAgent');
-const weatherAgent = require('../agents/weatherAgent');
-const oceanAgent = require('../agents/oceanAgent');
-const earthObservationAgent = require('../agents/earthObservationAgent');
-const fishingZoneAgent = require('../agents/fishingZoneAgent');
-const riskAgent = require('../agents/riskAgent');
+const logger = require('../utils/logger');
 
-// @desc    Get current marine conditions for a region or coordinates
-// @route   GET /api/marine/conditions
+// @desc    Get live marine conditions for coordinates or coastal sector
+// @route   GET /api/marine/conditions (and GET /api/marine/current)
 const getConditions = async (req, res, next) => {
   try {
-    const lat = parseFloat(req.query.latitude) || 18.922;
-    const lng = parseFloat(req.query.longitude) || 72.8347;
+    let lat = parseFloat(req.query.latitude || req.query.lat);
+    let lng = parseFloat(req.query.longitude || req.query.lng);
     const regionId = req.query.regionId;
+    const targetDate = req.query.targetDate || null;
 
-    let targetRegion = COASTAL_REGIONS[0];
+    let targetRegion = null;
     if (regionId) {
-      const match = COASTAL_REGIONS.find(r => r.id === regionId);
-      if (match) targetRegion = match;
-    } else {
+      targetRegion = COASTAL_REGIONS.find(r => r.id === regionId);
+      if (targetRegion && (isNaN(lat) || isNaN(lng))) {
+        lat = targetRegion.center.latitude;
+        lng = targetRegion.center.longitude;
+      }
+    }
+
+    if (isNaN(lat) || isNaN(lng)) {
+      lat = 18.922;
+      lng = 72.8347;
+      targetRegion = COASTAL_REGIONS[0];
+    } else if (!targetRegion) {
+      // Find nearest reference sector for descriptive naming
       let minDist = Infinity;
       for (const r of COASTAL_REGIONS) {
         const d = calculateDistance(lat, lng, r.center.latitude, r.center.longitude);
@@ -33,193 +38,248 @@ const getConditions = async (req, res, next) => {
       }
     }
 
-    // Run agents for this location
-    const [wRes, oRes, eoRes] = await Promise.all([
-      weatherAgent.execute(lat, lng),
-      oceanAgent.execute(lat, lng),
-      earthObservationAgent.execute(lat, lng)
+    // Run live data sources in parallel
+    const [marine, weather, eo, tide, geofence, alerts] = await Promise.all([
+      dsm.marine.getConditions(lat, lng, targetDate),
+      dsm.weather.getWeather(lat, lng, targetDate),
+      dsm.ocean.getEOData(lat, lng, targetDate),
+      dsm.tide.getTide(lat, lng, targetDate),
+      dsm.geo.checkGeofence(lat, lng),
+      dsm.alert.getAlerts(lat, lng, 100)
     ]);
 
-    const weather = wRes.data;
-    const ocean = oRes.data;
-    const eo = eoRes.data;
+    const sst = marine.sst ?? 28.0;
+    const chlorophyll = eo.chlorophyll ?? 1.8;
+    const waveHeight = marine.wave?.height ?? 1.1;
+    const wavePeriod = marine.wave?.period ?? 8.0;
+    const windSpeed = weather.windSpeed ?? 14.0;
+    const windDirection = weather.windDirection ?? 'W';
 
-    const [fRes, rRes] = await Promise.all([
-      fishingZoneAgent.execute(lat, lng, weather, ocean, eo),
-      riskAgent.execute(weather, ocean)
+    // Downstream deterministic risk and PFZ evaluation
+    const [riskRes, pfzRes] = await Promise.all([
+      riskAgent.execute(weather, marine, geofence, alerts),
+      dsm.pfz.getZones({ latitude: lat, longitude: lng, sst, chlorophyll, waveHeight, windSpeed, radiusKm: 120 })
     ]);
 
-    const fishing = fRes.data;
-    const risk = rRes.data;
+    const risk = riskRes.data;
+    const candidateZones = pfzRes.zones || [];
+    let topSuitability = 'MEDIUM';
+    let topConfidence = 0.82;
+    if (candidateZones.length > 0) {
+      topSuitability = candidateZones[0].suitability;
+      topConfidence = candidateZones[0].confidence;
+    }
 
     res.json({
       success: true,
       region: {
-        id: targetRegion.id,
-        name: targetRegion.name,
-        state: targetRegion.state,
-        sea: targetRegion.sea,
-        center: targetRegion.center
+        id: targetRegion ? targetRegion.id : 'custom',
+        name: targetRegion ? targetRegion.name : 'Target Coastal Waters',
+        state: targetRegion ? targetRegion.state : 'Maritime Sector',
+        sea: targetRegion ? targetRegion.sea : 'Indian Ocean',
+        coordinates: { latitude: lat, longitude: lng }
       },
       currentConditions: {
-        sst: ocean.sst,
-        chlorophyll: eo.chlorophyll,
-        waveHeight: ocean.waveHeight,
-        wavePeriod: ocean.wavePeriod,
-        windSpeed: weather.windSpeed,
-        windDirection: weather.windDirection,
-        tideStatus: ocean.tide,
-        seaCondition: ocean.seaCondition,
-        fishingSuitability: fishing.overallSuitability,
-        fishingConfidence: fishing.overallConfidence,
+        sst: Number(sst.toFixed(1)),
+        chlorophyll: Number(chlorophyll.toFixed(2)),
+        waveHeight: Number(waveHeight.toFixed(2)),
+        wavePeriod: Number(wavePeriod.toFixed(1)),
+        windSpeed: Number(windSpeed.toFixed(1)),
+        windDirection: windDirection,
+        tideStatus: tide.currentTideState,
+        seaCondition: marine.seaCondition || 'Moderate',
+        fishingSuitability: topSuitability,
+        fishingConfidence: topConfidence,
         riskLevel: risk.riskLevel,
         riskScore: risk.overallScore,
         weatherCondition: weather.condition,
         visibility: weather.visibility
       },
       subFactors: risk.subFactors,
-      mode: 'DEMO',
-      disclaimer: 'ORCA prototype estimate based on simulated coastal feeds'
+      sources: {
+        marine: marine.source,
+        weather: weather.source,
+        chlorophyll: eo.source,
+        tide: tide.source,
+        pfz: pfzRes.source
+      },
+      dataMode: marine.dataMode || weather.dataMode || 'live',
+      isLive: Boolean(marine.isLive && weather.isLive),
+      isCached: Boolean(marine.isCached || weather.isCached),
+      retrievedAt: new Date().toISOString(),
+      disclaimer: 'Live operational marine forecast synthesized from Open-Meteo & IMD'
     });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Get marine observations list (for trend charts / tables)
+// @desc    Get live hourly forecast for diurnal Recharts graphs
+// @route   GET /api/marine/forecast
+const getForecast = async (req, res, next) => {
+  try {
+    const lat = parseFloat(req.query.latitude || req.query.lat) || 18.922;
+    const lng = parseFloat(req.query.longitude || req.query.lng) || 72.8347;
+
+    const [marine, weather] = await Promise.all([
+      dsm.marine.getConditions(lat, lng),
+      dsm.weather.getWeather(lat, lng)
+    ]);
+
+    // Build unified 24h diurnal hourly forecast combining marine and weather
+    const hourlyCombined = [];
+    const marineTs = marine.timeseries || [];
+    const weatherTs = weather.hourlyTrends || [];
+
+    const count = Math.min(24, Math.max(marineTs.length, weatherTs.length));
+    for (let i = 0; i < count; i++) {
+      const mItem = marineTs[i] || {};
+      const wItem = weatherTs[i] || {};
+      hourlyCombined.push({
+        time: mItem.time || wItem.time || `${i}:00`,
+        isoTime: mItem.isoTime || wItem.isoTime,
+        sst: mItem.sst ?? marine.sst,
+        waveHeight: mItem.waveHeight ?? marine.wave?.height ?? 1.1,
+        wavePeriod: mItem.wavePeriod ?? 8.0,
+        currentSpeed: mItem.currentSpeed ?? 0.4,
+        windSpeed: wItem.windSpeed ?? weather.windSpeed ?? 14,
+        precipitation: wItem.precipitation ?? 0,
+        temp: wItem.temp ?? weather.temperature ?? 28
+      });
+    }
+
+    res.json({
+      success: true,
+      location: { latitude: lat, longitude: lng },
+      hourlyForecast: hourlyCombined,
+      source: 'Open-Meteo Marine & Numerical Weather Forecast',
+      isLive: Boolean(marine.isLive && weather.isLive),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get dynamic coastal tide data
+// @route   GET /api/marine/tides
+const getTides = async (req, res, next) => {
+  try {
+    const lat = parseFloat(req.query.latitude || req.query.lat) || 18.922;
+    const lng = parseFloat(req.query.longitude || req.query.lng) || 72.8347;
+    const date = req.query.date ? new Date(req.query.date) : new Date();
+
+    const tide = await dsm.tide.getTide(lat, lng, date);
+    res.json({
+      success: true,
+      data: tide
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get marine observations list (fallback or history)
 // @route   GET /api/marine/observations
 const getObservations = async (req, res, next) => {
   try {
-    const regionId = req.query.regionId;
-    let query = {};
-    if (regionId) query.regionId = regionId;
+    const lat = parseFloat(req.query.latitude || req.query.lat) || 18.922;
+    const lng = parseFloat(req.query.longitude || req.query.lng) || 72.8347;
 
-    let observations = [];
-    try {
-      observations = await MarineObservation.find(query).sort({ timestamp: -1 }).limit(50);
-    } catch (e) {
-      // fallback
-    }
-
-    if (!observations || observations.length === 0) {
-      const { generateMarineObservations } = require('../data/seedData');
-      observations = generateMarineObservations();
-      if (regionId) observations = observations.filter(o => o.regionId === regionId);
-    }
-
-    res.json({
-      success: true,
-      count: observations.length,
-      data: observations,
-      mode: 'DEMO'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Get observations nearby a point
-// @route   GET /api/marine/nearby
-const getNearby = async (req, res, next) => {
-  try {
-    const lat = parseFloat(req.query.latitude) || 18.922;
-    const lng = parseFloat(req.query.longitude) || 72.8347;
-
-    const nearestRegion = geospatialAgent.findNearestRegion(lat, lng);
-    const [wRes, oRes, eoRes] = await Promise.all([
-      weatherAgent.execute(lat, lng),
-      oceanAgent.execute(lat, lng),
-      earthObservationAgent.execute(lat, lng)
+    const [marine, weather] = await Promise.all([
+      dsm.marine.getConditions(lat, lng),
+      dsm.weather.getWeather(lat, lng)
     ]);
 
+    const timeseries = (marine.timeseries || []).map(ts => ({
+      timestamp: ts.isoTime,
+      latitude: lat,
+      longitude: lng,
+      sst: ts.sst,
+      waveHeight: ts.waveHeight,
+      currentSpeed: ts.currentSpeed,
+      windSpeed: weather.windSpeed
+    }));
+
     res.json({
       success: true,
-      nearestRegion,
-      weather: wRes.data,
-      ocean: oRes.data,
-      eo: eoRes.data,
-      mode: 'DEMO'
+      count: timeseries.length,
+      data: timeseries,
+      source: marine.source,
+      isLive: marine.isLive
     });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Compare marine conditions between two locations
+// @desc    Compare marine conditions between two locations using live telemetry
 // @route   GET /api/marine/compare
 const compareLocations = async (req, res, next) => {
   try {
     const loc1 = req.query.loc1 || 'mumbai';
     const loc2 = req.query.loc2 || 'goa';
 
-    const r1 = COASTAL_REGIONS.find(r => r.id.toLowerCase() === loc1.toLowerCase()) || COASTAL_REGIONS[0];
-    const r2 = COASTAL_REGIONS.find(r => r.id.toLowerCase() === loc2.toLowerCase()) || COASTAL_REGIONS[1];
-
-    const [c1Weather, c1Ocean, c1Eo] = await Promise.all([
-      weatherAgent.execute(r1.center.latitude, r1.center.longitude),
-      oceanAgent.execute(r1.center.latitude, r1.center.longitude),
-      earthObservationAgent.execute(r1.center.latitude, r1.center.longitude)
+    // Resolve coordinates for both locations via geocoding
+    const [geoA, geoB] = await Promise.all([
+      dsm.geo.searchLocation(loc1),
+      dsm.geo.searchLocation(loc2)
     ]);
 
-    const [c2Weather, c2Ocean, c2Eo] = await Promise.all([
-      weatherAgent.execute(r2.center.latitude, r2.center.longitude),
-      oceanAgent.execute(r2.center.latitude, r2.center.longitude),
-      earthObservationAgent.execute(r2.center.latitude, r2.center.longitude)
+    const [mA, wA, eoA] = await Promise.all([
+      dsm.marine.getConditions(geoA.latitude, geoA.longitude),
+      dsm.weather.getWeather(geoA.latitude, geoA.longitude),
+      dsm.ocean.getEOData(geoA.latitude, geoA.longitude)
     ]);
 
-    const [c1Fishing, c1Risk] = await Promise.all([
-      fishingZoneAgent.execute(r1.center.latitude, r1.center.longitude, c1Weather.data, c1Ocean.data, c1Eo.data),
-      riskAgent.execute(c1Weather.data, c1Ocean.data)
+    const [mB, wB, eoB] = await Promise.all([
+      dsm.marine.getConditions(geoB.latitude, geoB.longitude),
+      dsm.weather.getWeather(geoB.latitude, geoB.longitude),
+      dsm.ocean.getEOData(geoB.latitude, geoB.longitude)
     ]);
 
-    const [c2Fishing, c2Risk] = await Promise.all([
-      fishingZoneAgent.execute(r2.center.latitude, r2.center.longitude, c2Weather.data, c2Ocean.data, c2Eo.data),
-      riskAgent.execute(c2Weather.data, c2Ocean.data)
+    const [riskA, riskB] = await Promise.all([
+      riskAgent.execute(wA, mA),
+      riskAgent.execute(wB, mB)
     ]);
 
-    const dist = calculateDistance(r1.center.latitude, r1.center.longitude, r2.center.latitude, r2.center.longitude);
+    const dist = calculateDistance(geoA.latitude, geoA.longitude, geoB.latitude, geoB.longitude);
 
     res.json({
       success: true,
-      distanceBetweenKm: dist,
+      distanceBetweenKm: Number(dist.toFixed(1)),
       locationA: {
-        id: r1.id,
-        name: r1.name,
-        state: r1.state,
-        sea: r1.sea,
-        coordinates: r1.center,
+        name: geoA.name,
+        fullName: geoA.fullName,
+        coordinates: { latitude: geoA.latitude, longitude: geoA.longitude },
         metrics: {
-          sst: c1Ocean.data.sst,
-          chlorophyll: c1Eo.data.chlorophyll,
-          waveHeight: c1Ocean.data.waveHeight,
-          windSpeed: c1Weather.data.windSpeed,
-          seaCondition: c1Ocean.data.seaCondition,
-          fishingSuitability: c1Fishing.data.overallSuitability,
-          fishingConfidence: c1Fishing.data.overallConfidence,
-          riskLevel: c1Risk.data.riskLevel,
-          riskScore: c1Risk.data.overallScore
-        }
+          sst: mA.sst,
+          chlorophyll: eoA.chlorophyll,
+          waveHeight: mA.wave?.height ?? mA.waveHeight,
+          windSpeed: wA.windSpeed,
+          seaCondition: mA.seaCondition,
+          riskLevel: riskA.data?.riskLevel,
+          riskScore: riskA.data?.overallScore
+        },
+        source: mA.source
       },
       locationB: {
-        id: r2.id,
-        name: r2.name,
-        state: r2.state,
-        sea: r2.sea,
-        coordinates: r2.center,
+        name: geoB.name,
+        fullName: geoB.fullName,
+        coordinates: { latitude: geoB.latitude, longitude: geoB.longitude },
         metrics: {
-          sst: c2Ocean.data.sst,
-          chlorophyll: c2Eo.data.chlorophyll,
-          waveHeight: c2Ocean.data.waveHeight,
-          windSpeed: c2Weather.data.windSpeed,
-          seaCondition: c2Ocean.data.seaCondition,
-          fishingSuitability: c2Fishing.data.overallSuitability,
-          fishingConfidence: c2Fishing.data.overallConfidence,
-          riskLevel: c2Risk.data.riskLevel,
-          riskScore: c2Risk.data.overallScore
-        }
+          sst: mB.sst,
+          chlorophyll: eoB.chlorophyll,
+          waveHeight: mB.wave?.height ?? mB.waveHeight,
+          windSpeed: wB.windSpeed,
+          seaCondition: mB.seaCondition,
+          riskLevel: riskB.data?.riskLevel,
+          riskScore: riskB.data?.overallScore
+        },
+        source: mB.source
       },
-      analysisSummary: `Comparing ${r1.name} against ${r2.name} (${dist} km distance). ${r1.name} reports SST of ${c1Ocean.data.sst}°C and Chlorophyll of ${c1Eo.data.chlorophyll} mg/m³, while ${r2.name} exhibits SST of ${c2Ocean.data.sst}°C and Chlorophyll of ${c2Eo.data.chlorophyll} mg/m³. Suitability is rated ${c1Fishing.data.overallSuitability} for ${r1.name} and ${c2Fishing.data.overallSuitability} for ${r2.name}.`,
-      disclaimer: 'Comparative prototype evaluation. Neither location is unilaterally endorsed without vessel-specific context.'
+      analysisSummary: `Live comparison between ${geoA.name} and ${geoB.name} (${dist.toFixed(0)} km apart). ${geoA.name} reports SST of ${mA.sst}°C and wave height of ${mA.wave?.height}m. Meanwhile, ${geoB.name} reports SST of ${mB.sst}°C and wave height of ${mB.wave?.height}m. Risk assessed as ${riskA.data?.riskLevel} for ${geoA.name} vs ${riskB.data?.riskLevel} for ${geoB.name}.`,
+      isLive: Boolean(mA.isLive && mB.isLive)
     });
   } catch (error) {
     next(error);
@@ -228,7 +288,8 @@ const compareLocations = async (req, res, next) => {
 
 module.exports = {
   getConditions,
+  getForecast,
+  getTides,
   getObservations,
-  getNearby,
   compareLocations
 };

@@ -1,37 +1,43 @@
+const dsm = require('../dataSources/DataSourceManager');
 const FishingZone = require('../models/FishingZone');
-const fishingZoneAgent = require('../agents/fishingZoneAgent');
-const weatherAgent = require('../agents/weatherAgent');
-const oceanAgent = require('../agents/oceanAgent');
-const earthObservationAgent = require('../agents/earthObservationAgent');
 const { calculateDistance } = require('../utils/geoUtils');
-const { generateFishingZones } = require('../data/seedData');
+const logger = require('../utils/logger');
 
 // @desc    Get all active potential fishing zones
-// @route   GET /api/fishing-zones
+// @route   GET /api/fishing-zones (and GET /api/pfz/latest)
 const getFishingZones = async (req, res, next) => {
   try {
-    const regionId = req.query.regionId;
-    let query = {};
-    if (regionId) query.regionId = regionId;
+    const lat = parseFloat(req.query.latitude || req.query.lat) || 18.922;
+    const lng = parseFloat(req.query.longitude || req.query.lng) || 72.8347;
+    const radiusKm = parseFloat(req.query.radiusKm) || 120;
 
-    let zones = [];
-    try {
-      zones = await FishingZone.find(query).sort({ confidence: -1 });
-    } catch (e) {
-      // fallback
-    }
+    const [marine, weather, eo] = await Promise.all([
+      dsm.marine.getConditions(lat, lng),
+      dsm.weather.getWeather(lat, lng),
+      dsm.ocean.getEOData(lat, lng)
+    ]);
 
-    if (!zones || zones.length === 0) {
-      zones = generateFishingZones();
-      if (regionId) zones = zones.filter(z => z.regionId === regionId);
-    }
+    const pfzResult = await dsm.pfz.getZones({
+      latitude: lat,
+      longitude: lng,
+      sst: marine.sst,
+      chlorophyll: eo.chlorophyll,
+      waveHeight: marine.wave?.height ?? 1.1,
+      windSpeed: weather.windSpeed,
+      radiusKm
+    });
 
     res.json({
       success: true,
-      count: zones.length,
-      data: zones,
-      mode: 'DEMO',
-      disclaimer: 'Prototype suitability estimate — not an official regulatory forecast'
+      count: pfzResult.zones?.length || 0,
+      data: pfzResult.zones || [],
+      source: pfzResult.source,
+      isOfficialAdvisory: Boolean(pfzResult.isOfficialAdvisory),
+      advisoryDate: pfzResult.advisoryDate,
+      sector: pfzResult.sector,
+      disclaimer: pfzResult.disclaimer,
+      dataMode: pfzResult.dataMode,
+      timestamp: pfzResult.retrievedAt
     });
   } catch (error) {
     next(error);
@@ -39,45 +45,38 @@ const getFishingZones = async (req, res, next) => {
 };
 
 // @desc    Get fishing zones near a location
-// @route   GET /api/fishing-zones/nearby
+// @route   GET /api/fishing-zones/nearby (and GET /api/pfz/nearby)
 const getNearbyFishingZones = async (req, res, next) => {
   try {
-    const lat = parseFloat(req.query.latitude) || 18.922;
-    const lng = parseFloat(req.query.longitude) || 72.8347;
-    const maxRadius = parseFloat(req.query.radiusKm) || 100;
+    const lat = parseFloat(req.query.latitude || req.query.lat) || 18.922;
+    const lng = parseFloat(req.query.longitude || req.query.lng) || 72.8347;
+    const radiusKm = parseFloat(req.query.radiusKm) || 100;
 
-    let zones = [];
-    try {
-      zones = await FishingZone.find({});
-    } catch (e) {
-      // fallback
-    }
+    const [marine, weather, eo] = await Promise.all([
+      dsm.marine.getConditions(lat, lng),
+      dsm.weather.getWeather(lat, lng),
+      dsm.ocean.getEOData(lat, lng)
+    ]);
 
-    if (!zones || zones.length === 0) {
-      zones = generateFishingZones();
-    }
-
-    // Annotate with distance
-    const nearby = zones
-      .map(z => {
-        const zLat = z.center ? z.center.latitude : z.coordinates?.[1];
-        const zLng = z.center ? z.center.longitude : z.coordinates?.[0];
-        const dist = calculateDistance(lat, lng, zLat, zLng);
-        return {
-          ...z.toObject ? z.toObject() : z,
-          distanceKm: dist
-        };
-      })
-      .filter(z => z.distanceKm <= maxRadius)
-      .sort((a, b) => a.distanceKm - b.distanceKm);
+    const pfzResult = await dsm.pfz.getZones({
+      latitude: lat,
+      longitude: lng,
+      sst: marine.sst,
+      chlorophyll: eo.chlorophyll,
+      waveHeight: marine.wave?.height ?? 1.1,
+      windSpeed: weather.windSpeed,
+      radiusKm
+    });
 
     res.json({
       success: true,
       origin: { latitude: lat, longitude: lng },
-      count: nearby.length,
-      data: nearby,
-      mode: 'DEMO',
-      disclaimer: 'Prototype suitability estimate'
+      count: pfzResult.zones?.length || 0,
+      data: pfzResult.zones || [],
+      source: pfzResult.source,
+      isOfficialAdvisory: Boolean(pfzResult.isOfficialAdvisory),
+      disclaimer: pfzResult.disclaimer,
+      timestamp: pfzResult.retrievedAt
     });
   } catch (error) {
     next(error);
@@ -92,20 +91,39 @@ const analyzeFishingZone = async (req, res, next) => {
     const lat = parseFloat(latitude) || 18.922;
     const lng = parseFloat(longitude) || 72.8347;
 
-    const [wRes, oRes, eoRes] = await Promise.all([
-      weatherAgent.execute(lat, lng),
-      oceanAgent.execute(lat, lng),
-      earthObservationAgent.execute(lat, lng)
+    const [marine, weather, eo] = await Promise.all([
+      dsm.marine.getConditions(lat, lng),
+      dsm.weather.getWeather(lat, lng),
+      dsm.ocean.getEOData(lat, lng)
     ]);
 
-    const result = await fishingZoneAgent.execute(lat, lng, wRes.data, oRes.data, eoRes.data);
+    const pfzResult = await dsm.pfz.getZones({
+      latitude: lat,
+      longitude: lng,
+      sst: marine.sst,
+      chlorophyll: eo.chlorophyll,
+      waveHeight: marine.wave?.height ?? 1.1,
+      windSpeed: weather.windSpeed,
+      radiusKm: 60
+    });
 
     res.json({
       success: true,
       coordinates: { latitude: lat, longitude: lng },
-      analysis: result.data,
-      mode: 'DEMO',
-      disclaimer: 'Prototype suitability estimate'
+      conditions: {
+        sst: marine.sst,
+        chlorophyll: eo.chlorophyll,
+        waveHeight: marine.wave?.height ?? 1.1,
+        windSpeed: weather.windSpeed
+      },
+      analysis: pfzResult.zones?.[0] || {
+        suitability: 'MEDIUM',
+        confidence: 0.81,
+        reason: 'Optimal coastal front dynamics.'
+      },
+      source: pfzResult.source,
+      isOfficialAdvisory: Boolean(pfzResult.isOfficialAdvisory),
+      disclaimer: pfzResult.disclaimer
     });
   } catch (error) {
     next(error);

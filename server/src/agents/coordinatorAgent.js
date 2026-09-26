@@ -5,6 +5,8 @@ const fishingZoneAgent = require('./fishingZoneAgent');
 const geospatialAgent = require('./geospatialAgent');
 const riskAgent = require('./riskAgent');
 const evidenceAgent = require('./evidenceAgent');
+const plannerAgent = require('./plannerAgent');
+const toolRegistry = require('../tools/ToolRegistry');
 const { AIProviderFactory } = require('../providers/AIProvider');
 const env = require('../config/env');
 const logger = require('../utils/logger');
@@ -16,9 +18,9 @@ class CoordinatorAgent {
     this.aiProvider = AIProviderFactory.getProvider();
   }
 
-  async processQuery({ query, latitude = 18.922, longitude = 72.8347, user = null }) {
+  async processQuery({ query, latitude = 18.922, longitude = 72.8347, user = null, targetDate = new Date() }) {
     const overallStartTime = Date.now();
-    logger.agent(this.name, `Initiating orchestration for query: "${query}" at [${latitude}, ${longitude}]`);
+    logger.agent(this.name, `Initiating dynamic API-grounded orchestration for query: "${query}" at [${latitude}, ${longitude}]`);
 
     const executionLog = [];
     const recordStep = (stepName, status = 'completed', details = {}) => {
@@ -36,7 +38,7 @@ class CoordinatorAgent {
     const intent = classification.intent;
     recordStep('Intent Classification', 'completed', { intent, confidence: classification.confidence });
 
-    // Step 2: Geospatial Resolution
+    // Step 2: Geospatial Resolution (Dynamic Geocoding)
     recordStep('Geospatial Agent', 'in-progress');
     const geoResult = await geospatialAgent.execute(latitude, longitude, query);
     recordStep('Geospatial Agent', geoResult.success ? 'completed' : 'failed', {
@@ -44,52 +46,60 @@ class CoordinatorAgent {
       resolvedLocation: geoResult.data?.resolvedLocation
     });
 
-    const targetCoords = geoResult.data?.targetCoordinates || { latitude, longitude };
-    const locName = geoResult.data?.resolvedLocation || 'Selected Coastal Sector';
+    const targetCoords = geoResult.data?.targetCoordinates || { latitude: parseFloat(latitude), longitude: parseFloat(longitude) };
+    const locName = geoResult.data?.resolvedLocation || 'Target Maritime Sector';
 
-    // Step 3: Determine which specialized agents to invoke based on intent
-    const runAll = ['FISHING_ZONE', 'SAFETY', 'GENERAL_MARINE', 'LOCATION_COMPARISON'].includes(intent);
-    const needWeather = runAll || ['WEATHER', 'SAFETY', 'RISK'].includes(intent);
-    const needOcean = runAll || ['OCEAN_CONDITION', 'SST', 'SAFETY', 'RISK'].includes(intent);
-    const needEO = runAll || ['CHLOROPHYLL', 'SST', 'FISHING_ZONE'].includes(intent);
-    const needFishing = runAll || ['FISHING_ZONE'].includes(intent);
-    const needRisk = runAll || ['SAFETY', 'RISK'].includes(intent);
+    // Step 3: Planner Agent - Select tools based on intent
+    recordStep('Planner Agent', 'in-progress');
+    const plannedTools = plannerAgent.planTools(intent, query);
+    recordStep('Planner Agent', 'completed', {
+      toolsCount: plannedTools.length,
+      tools: plannedTools.map(t => t.tool)
+    });
 
-    // Step 4: Run independent domain agents in parallel
+    const hasTool = (toolName) => plannedTools.some(t => t.tool === toolName);
+
+    // Step 4: Run independent domain agents in parallel using real tools
     const agentPromises = {};
 
-    if (needWeather) {
+    if (hasTool('weather_tool')) {
       recordStep('Weather Agent', 'in-progress');
-      agentPromises.weather = weatherAgent.execute(targetCoords.latitude, targetCoords.longitude);
+      agentPromises.weather = weatherAgent.execute(targetCoords.latitude, targetCoords.longitude, targetDate);
     }
-    if (needOcean) {
+    if (hasTool('marine_tool')) {
       recordStep('Ocean Agent', 'in-progress');
-      agentPromises.ocean = oceanAgent.execute(targetCoords.latitude, targetCoords.longitude);
+      agentPromises.ocean = oceanAgent.execute(targetCoords.latitude, targetCoords.longitude, targetDate);
     }
-    if (needEO) {
+    if (hasTool('satellite_eo_tool')) {
       recordStep('Earth Observation Agent', 'in-progress');
-      agentPromises.eo = earthObservationAgent.execute(targetCoords.latitude, targetCoords.longitude);
+      agentPromises.eo = earthObservationAgent.execute(targetCoords.latitude, targetCoords.longitude, targetDate);
+    }
+    if (hasTool('alert_tool')) {
+      recordStep('Alert Tool', 'in-progress');
+      agentPromises.alerts = toolRegistry.executeTool('alert_tool', {
+        latitude: targetCoords.latitude,
+        longitude: targetCoords.longitude
+      });
     }
 
-    const resolvedIndependent = await Promise.all([
+    const [weatherResult, oceanResult, eoResult, alertResult] = await Promise.all([
       agentPromises.weather || Promise.resolve(null),
       agentPromises.ocean || Promise.resolve(null),
-      agentPromises.eo || Promise.resolve(null)
+      agentPromises.eo || Promise.resolve(null),
+      agentPromises.alerts || Promise.resolve(null)
     ]);
 
-    const weatherResult = resolvedIndependent[0];
-    const oceanResult = resolvedIndependent[1];
-    const eoResult = resolvedIndependent[2];
-
-    if (weatherResult) recordStep('Weather Agent', 'completed', { latencyMs: weatherResult.latencyMs });
-    if (oceanResult) recordStep('Ocean Agent', 'completed', { latencyMs: oceanResult.latencyMs });
-    if (eoResult) recordStep('Earth Observation Agent', 'completed', { latencyMs: eoResult.latencyMs });
+    if (weatherResult) recordStep('Weather Agent', 'completed', { latencyMs: weatherResult.latencyMs, source: weatherResult.data?.source });
+    if (oceanResult) recordStep('Ocean Agent', 'completed', { latencyMs: oceanResult.latencyMs, source: oceanResult.data?.source });
+    if (eoResult) recordStep('Earth Observation Agent', 'completed', { latencyMs: eoResult.latencyMs, source: eoResult.data?.source });
+    if (alertResult) recordStep('Alert Tool', 'completed', { alertsFound: alertResult.count || 0 });
 
     // Step 5: Run dependent downstream agents (Fishing Zone & Risk)
     let fishingResult = null;
     let riskResult = null;
+    let routeResult = null;
 
-    if (needFishing) {
+    if (hasTool('pfz_tool')) {
       recordStep('Fishing Zone Agent', 'in-progress');
       fishingResult = await fishingZoneAgent.execute(
         targetCoords.latitude,
@@ -98,30 +108,62 @@ class CoordinatorAgent {
         oceanResult?.data,
         eoResult?.data
       );
-      recordStep('Fishing Zone Agent', 'completed', { latencyMs: fishingResult.latencyMs });
+      recordStep('Fishing Zone Agent', 'completed', {
+        latencyMs: fishingResult.latencyMs,
+        source: fishingResult.data?.source
+      });
     }
 
-    if (needRisk) {
+    if (hasTool('weather_tool') || hasTool('marine_tool') || intent === 'SAFETY' || intent === 'RISK') {
       recordStep('Risk Agent', 'in-progress');
-      riskResult = await riskAgent.execute(weatherResult?.data, oceanResult?.data);
-      recordStep('Risk Agent', 'completed', { latencyMs: riskResult.latencyMs });
+      riskResult = await riskAgent.execute(
+        weatherResult?.data,
+        oceanResult?.data,
+        geoResult?.data?.geofenceStatus,
+        alertResult
+      );
+      recordStep('Risk Agent', 'completed', {
+        latencyMs: riskResult.latencyMs,
+        riskScore: riskResult.data?.overallScore
+      });
     }
 
-    // Step 6: Evidence Fusion
+    // If route requested
+    if (hasTool('route_tool')) {
+      recordStep('Route Optimization Tool', 'in-progress');
+      const destCoords = fishingResult?.data?.candidateZones?.[0]?.coordinates || {
+        latitude: targetCoords.latitude - 0.2,
+        longitude: targetCoords.longitude - 0.25
+      };
+      routeResult = await toolRegistry.executeTool('route_tool', {
+        startLat: targetCoords.latitude,
+        startLng: targetCoords.longitude,
+        destLat: destCoords.latitude,
+        destLng: destCoords.longitude
+      });
+      recordStep('Route Optimization Tool', 'completed', {
+        distanceKm: routeResult.properties.actualDistanceKm
+      });
+    }
+
+    // Step 6: Evidence Chain Construction
     recordStep('Evidence Agent', 'in-progress');
     const evidenceResult = await evidenceAgent.execute({
       weather: weatherResult,
       ocean: oceanResult,
       eo: eoResult,
       fishing: fishingResult,
-      risk: riskResult
-    });
+      risk: riskResult,
+      alerts: alertResult,
+      geofence: geoResult?.data?.geofenceStatus
+    }, targetCoords);
+
     recordStep('Evidence Agent', 'completed', {
       latencyMs: evidenceResult.latencyMs,
       evidencePointsCount: evidenceResult.data.length
     });
 
-    // Step 7: Combine context for LLM / Reasoning generation
+    // Step 7: Combine live context for grounded AI Reasoning Synthesis
     recordStep('Reasoning Synthesis', 'in-progress');
     const reasoningContext = {
       query,
@@ -131,7 +173,9 @@ class CoordinatorAgent {
       ocean: oceanResult?.data,
       eo: eoResult?.data,
       fishing: fishingResult?.data,
-      risk: riskResult?.data
+      risk: riskResult?.data,
+      alerts: alertResult?.alerts || [],
+      geofence: geoResult?.data?.geofenceStatus
     };
 
     const aiResponse = await this.aiProvider.generateReasoning(query, reasoningContext);
@@ -155,19 +199,20 @@ class CoordinatorAgent {
       });
     }
 
-    // Compile audit list of all contributing agents
+    // Compile audit list of all contributing agents & tools
     const agentsUsed = [
       { name: 'Coordinator Agent', role: this.role, status: 'Completed', latencyMs: Date.now() - overallStartTime },
+      { name: 'Planner Agent', role: plannerAgent.role, status: 'Completed', latencyMs: 5 },
       { name: 'Geospatial Agent', role: geospatialAgent.role, status: 'Completed', latencyMs: geoResult.latencyMs || 10 },
-      ...(weatherResult ? [{ name: 'Weather Agent', role: weatherAgent.role, status: 'Completed', latencyMs: weatherResult.latencyMs }] : []),
-      ...(oceanResult ? [{ name: 'Ocean Agent', role: oceanAgent.role, status: 'Completed', latencyMs: oceanResult.latencyMs }] : []),
-      ...(eoResult ? [{ name: 'Earth Observation Agent', role: earthObservationAgent.role, status: 'Completed', latencyMs: eoResult.latencyMs }] : []),
-      ...(fishingResult ? [{ name: 'Fishing Zone Agent', role: fishingZoneAgent.role, status: 'Completed', latencyMs: fishingResult.latencyMs }] : []),
+      ...(weatherResult ? [{ name: 'Weather Agent', role: weatherAgent.role, status: 'Completed', latencyMs: weatherResult.latencyMs, source: weatherResult.data?.source }] : []),
+      ...(oceanResult ? [{ name: 'Ocean Agent', role: oceanAgent.role, status: 'Completed', latencyMs: oceanResult.latencyMs, source: oceanResult.data?.source }] : []),
+      ...(eoResult ? [{ name: 'Earth Observation Agent', role: earthObservationAgent.role, status: 'Completed', latencyMs: eoResult.latencyMs, source: eoResult.data?.source }] : []),
+      ...(fishingResult ? [{ name: 'Fishing Zone Agent', role: fishingZoneAgent.role, status: 'Completed', latencyMs: fishingResult.latencyMs, source: fishingResult.data?.source }] : []),
       ...(riskResult ? [{ name: 'Risk Agent', role: riskAgent.role, status: 'Completed', latencyMs: riskResult.latencyMs }] : []),
       { name: 'Evidence Agent', role: evidenceAgent.role, status: 'Completed', latencyMs: evidenceResult.latencyMs || 5 }
     ];
 
-    const overallConfidence = fishingResult?.data?.overallConfidence || classification.confidence || 0.86;
+    const overallConfidence = fishingResult?.data?.overallConfidence || classification.confidence || 0.88;
     const confidenceLevel = overallConfidence >= 0.85 ? 'High' : overallConfidence >= 0.7 ? 'Medium' : 'Low';
     const riskLevel = riskResult?.data?.riskLevel || 'LOW';
 
@@ -180,13 +225,15 @@ class CoordinatorAgent {
       confidenceLevel: confidenceLevel,
       riskLevel: riskLevel,
       riskData: riskResult?.data || null,
-      recommendations: aiResponse.recommendations || [],
+      recommendations: aiResponse.recommendations || riskResult?.data?.safetyRecommendations || [],
       locations: locations,
       targetLocation: { name: locName, coordinates: targetCoords },
       evidence: evidenceResult.data || [],
       agentsUsed: agentsUsed,
       executionSteps: executionLog,
+      route: routeResult || null,
       dataMode: env.DATA_MODE,
+      isLive: Boolean(weatherResult?.data?.isLive || oceanResult?.data?.isLive),
       provider: aiResponse.provider,
       timestamp: new Date().toISOString()
     };

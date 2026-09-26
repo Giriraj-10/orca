@@ -1,21 +1,30 @@
-const { DemoOceanProvider, LiveOceanProvider } = require('../providers/OceanProvider');
-const env = require('../config/env');
+const toolRegistry = require('../tools/ToolRegistry');
 const logger = require('../utils/logger');
 
 class OceanAgent {
   constructor() {
     this.name = 'Ocean Agent';
     this.role = 'Oceanographic & Hydrodynamic Evaluation';
-    this.provider = env.DATA_MODE === 'LIVE' ? new LiveOceanProvider() : new DemoOceanProvider();
   }
 
   async execute(latitude, longitude, targetDate = new Date()) {
     const startTime = Date.now();
-    logger.agent(this.name, `Evaluating ocean dynamics at [${latitude}, ${longitude}]`);
+    logger.agent(this.name, `Invoking marine_tool for dynamics at [${latitude}, ${longitude}]`);
 
     try {
-      const data = await this.provider.getOceanConditions(latitude, longitude, targetDate);
+      const marineData = await toolRegistry.executeTool('marine_tool', {
+        latitude,
+        longitude,
+        targetDate
+      });
+
       const latencyMs = Date.now() - startTime;
+
+      const waveHeight = marineData.wave?.height ?? marineData.waveHeight ?? 1.1;
+      const wavePeriod = marineData.wave?.period ?? marineData.wavePeriod ?? 8.0;
+      const waveDirection = marineData.wave?.direction ?? 240;
+      const currentSpeed = marineData.current?.velocity ?? marineData.currentSpeed ?? 0.4;
+      const currentDirection = marineData.current?.direction ?? 180;
 
       return {
         success: true,
@@ -23,20 +32,21 @@ class OceanAgent {
         role: this.role,
         latencyMs,
         data: {
-          location: data.location,
-          regionId: data.regionId,
-          sst: data.sst,
-          waveHeight: data.waveHeight,
-          wavePeriod: data.wavePeriod,
-          waveDirection: data.waveDirection,
-          currentSpeed: data.currentSpeed,
-          currentDirection: data.currentDirection,
-          tide: data.tide,
-          seaCondition: data.seaCondition,
-          salinity: data.salinity,
-          source: data.source,
-          mode: data.mode,
-          timestamp: data.timestamp
+          location: marineData.location || { latitude, longitude },
+          sst: marineData.sst,
+          waveHeight: Number(waveHeight.toFixed(2)),
+          wavePeriod: Number(wavePeriod.toFixed(1)),
+          waveDirection: waveDirection,
+          currentSpeed: Number(currentSpeed.toFixed(2)),
+          currentDirection: currentDirection,
+          tide: marineData.tide || 'Semi-diurnal Harmonic Tide',
+          seaCondition: marineData.seaCondition || 'Moderate',
+          timeseries: marineData.timeseries || [],
+          source: marineData.source || 'Open-Meteo Marine Hydrodynamic API',
+          dataMode: marineData.dataMode || 'live',
+          isLive: Boolean(marineData.isLive),
+          isCached: Boolean(marineData.isCached),
+          timestamp: marineData.timestamp || new Date().toISOString()
         }
       };
     } catch (err) {

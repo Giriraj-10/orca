@@ -1,0 +1,141 @@
+{
+  "type": "FeatureCollection",
+  "name": "Indian Coastal Marine Geofences & Restricted Maritime Zones",
+  "metadata": {
+    "source": "Ministry of Environment, Forest and Climate Change (MoEFCC) & Directorate General of Shipping (DGS)",
+    "description": "Marine Protected Areas (MPAs), defense operational zones, and environmental conservation boundaries",
+    "updatedAt": "2026-09-26T00:00:00Z"
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "geo-gahirmatha",
+      "properties": {
+        "id": "geo-gahirmatha",
+        "name": "Gahirmatha Marine Wildlife Sanctuary",
+        "category": "MARINE_PROTECTED_AREA",
+        "restrictionLevel": "PROHIBITED_COMMERCIAL_FISHING",
+        "state": "Odisha",
+        "sea": "Bay of Bengal",
+        "description": "Strict conservation zone for Olive Ridley turtle mass nesting (Arribada). Mechanized trawling and gillnetting strictly prohibited by State Fisheries Act.",
+        "color": "#ef4444"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [86.85, 20.45],
+            [87.20, 20.65],
+            [87.15, 20.85],
+            [86.75, 20.70],
+            [86.85, 20.45]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "geo-bombay-high-security",
+      "properties": {
+        "id": "geo-bombay-high-security",
+        "name": "Bombay High Offshore Energy Security Perimeter",
+        "category": "RESTRICTED_SECURITY_ZONE",
+        "restrictionLevel": "NAVIGATIONAL_SAFETY_ZONE",
+        "state": "Maharashtra Offshore",
+        "sea": "Arabian Sea",
+        "description": "500-meter safety zone around offshore oil production platforms and subsea pipelines. Trawling, anchoring, and unauthorized entry prohibited.",
+        "color": "#f97316"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [71.20, 19.30],
+            [71.60, 19.30],
+            [71.60, 19.70],
+            [71.20, 19.70],
+            [71.20, 19.30]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "geo-malvan-sanctuary",
+      "properties": {
+        "id": "geo-malvan-sanctuary",
+        "name": "Malvan Marine Wildlife Sanctuary",
+        "category": "MARINE_PROTECTED_AREA",
+        "restrictionLevel": "ECO_SENSITIVE_CORAL_ZONE",
+        "state": "Maharashtra",
+        "sea": "Arabian Sea",
+        "description": "Core marine sanctuary protecting submerged coral reefs, pearl oysters, and sea anemones. Destructive drag-net fishing prohibited.",
+        "color": "#eab308"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [73.42, 16.02],
+            [73.50, 16.02],
+            [73.50, 16.08],
+            [73.42, 16.08],
+            [73.42, 16.02]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "geo-mannar-biosphere",
+      "properties": {
+        "id": "geo-mannar-biosphere",
+        "name": "Gulf of Mannar Marine Biosphere Core",
+        "category": "MARINE_PROTECTED_AREA",
+        "restrictionLevel": "CORAL_REEF_CONSERVATION",
+        "state": "Tamil Nadu",
+        "sea": "Gulf of Mannar",
+        "description": "Biodiversity hotspot housing dugongs, sea turtles, and pristine coral shoals. Regulated traditional artisanal fishing only.",
+        "color": "#ef4444"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [78.85, 9.15],
+            [79.25, 9.25],
+            [79.35, 9.05],
+            [78.95, 8.95],
+            [78.85, 9.15]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "geo-vizag-naval-corridor",
+      "properties": {
+        "id": "geo-vizag-naval-corridor",
+        "name": "Visakhapatnam Eastern Naval Operational Corridor",
+        "category": "RESTRICTED_SECURITY_ZONE",
+        "restrictionLevel": "NAVAL_TRAFFIC_SEPARATION",
+        "state": "Andhra Pradesh",
+        "sea": "Bay of Bengal",
+        "description": "Submarine approach lane and deep draft naval vessel maneuver corridor. Non-commercial crafts must keep clear and maintain VHF watch.",
+        "color": "#f97316"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [83.35, 17.65],
+            [83.60, 17.75],
+            [83.55, 17.55],
+            [83.30, 17.48],
+            [83.35, 17.65]
+          ]
+        ]
+      }
+    }
+  ]
+}

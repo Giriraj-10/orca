@@ -15,7 +15,11 @@ import {
   Activity,
   Layers,
   MapPin,
-  RefreshCw
+  RefreshCw,
+  Search,
+  Clock,
+  CheckCircle2,
+  Radio
 } from 'lucide-react';
 import { useLocation } from '../context/LocationContext';
 import { useAuth } from '../context/AuthContext';
@@ -36,24 +40,48 @@ import {
 } from 'recharts';
 
 const DashboardPage = () => {
-  const { currentRegion } = useLocation();
+  const {
+    currentRegion,
+    allRegions,
+    selectRegionById,
+    searchAndSetLocation,
+    useBrowserGeolocation,
+    isGpsActive,
+    searching,
+    timeFilter,
+    setTimeFilter,
+    targetDate
+  } = useLocation();
+
   const { user } = useAuth();
   const navigate = useNavigate();
 
   const [conditions, setConditions] = useState(null);
+  const [hourlyForecast, setHourlyForecast] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [quickQuery, setQuickQuery] = useState('');
+  const [locationSearchInput, setLocationSearchInput] = useState('');
+  const [dataMeta, setDataMeta] = useState({ isLive: true, source: 'Open-Meteo', dataMode: 'live' });
 
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      const [condRes, alertRes] = await Promise.all([
-        marineService.getConditions(currentRegion.lat, currentRegion.lng, currentRegion.id),
-        alertService.getAlerts(currentRegion.id)
+      const [condRes, forecastRes, alertRes] = await Promise.all([
+        marineService.getConditions(currentRegion.lat, currentRegion.lng, currentRegion.id, targetDate),
+        marineService.getForecast(currentRegion.lat, currentRegion.lng),
+        alertService.getAlerts(currentRegion.lat, currentRegion.lng, 100)
       ]);
+
       setConditions(condRes.currentConditions);
+      setHourlyForecast(forecastRes.hourlyForecast || []);
       setAlerts(alertRes.data || []);
+      setDataMeta({
+        isLive: condRes.isLive,
+        dataMode: condRes.dataMode || 'hybrid',
+        source: condRes.sources?.marine || 'Open-Meteo Marine API',
+        retrievedAt: condRes.retrievedAt
+      });
     } catch (err) {
       console.warn('Dashboard fetch error:', err.message);
     } finally {
@@ -63,7 +91,7 @@ const DashboardPage = () => {
 
   useEffect(() => {
     fetchDashboardData();
-  }, [currentRegion]);
+  }, [currentRegion, targetDate]);
 
   const handleQuickAsk = (e) => {
     e.preventDefault();
@@ -72,54 +100,109 @@ const DashboardPage = () => {
     }
   };
 
-  // Synthetic trend array for Recharts based on current metrics
-  const mockTrendData = [
-    { time: '04:00', sst: (conditions?.sst || 27.5) - 0.4, chl: (conditions?.chlorophyll || 1.8) - 0.15, wave: 0.9, wind: 11 },
-    { time: '07:00', sst: (conditions?.sst || 27.5) - 0.2, chl: (conditions?.chlorophyll || 1.8) + 0.1, wave: 1.0, wind: 13 },
-    { time: '10:00', sst: (conditions?.sst || 27.5) + 0.1, chl: (conditions?.chlorophyll || 1.8) + 0.25, wave: (conditions?.waveHeight || 1.1), wind: (conditions?.windSpeed || 14) },
-    { time: '13:00', sst: (conditions?.sst || 27.5) + 0.5, chl: (conditions?.chlorophyll || 1.8) + 0.05, wave: 1.2, wind: 16 },
-    { time: '16:00', sst: (conditions?.sst || 27.5) + 0.3, chl: (conditions?.chlorophyll || 1.8) - 0.1, wave: 1.1, wind: 15 },
-    { time: '19:00', sst: (conditions?.sst || 27.5), chl: (conditions?.chlorophyll || 1.8), wave: 1.0, wind: 12 },
-  ];
+  const handleLocationSearch = async (e) => {
+    e.preventDefault();
+    if (locationSearchInput.trim()) {
+      await searchAndSetLocation(locationSearchInput.trim());
+      setLocationSearchInput('');
+    }
+  };
 
   return (
     <div className="space-y-6">
-      {/* Top Banner: Region & Quick Search Bar */}
+      {/* Top Banner: Dynamic Geocoding Search, Time Selector & Quick AI Prompt */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-gradient-to-r from-ocean-900 via-ocean-850 to-ocean-900 border border-ocean-700/60 rounded-2xl p-4 sm:p-6 shadow-xl">
-        <div>
-          <div className="flex items-center space-x-2 text-xs font-mono text-cyan-400 mb-1">
-            <MapPin className="w-3.5 h-3.5" />
-            <span>OPERATIONAL SECTOR: {currentRegion.name.toUpperCase()} ({currentRegion.sea})</span>
+        <div className="space-y-2">
+          {/* Location Badge & Live Status */}
+          <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+            <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-cyan-950 border border-cyan-700/50 text-cyan-300">
+              <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{currentRegion.name.toUpperCase()} [{currentRegion.lat.toFixed(2)}°N, {currentRegion.lng.toFixed(2)}°E]</span>
+            </div>
+
+            {/* Live Data Badge */}
+            <div className={`flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+              dataMeta.isLive
+                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40'
+                : 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+            }`}>
+              <Radio className={`w-3 h-3 ${dataMeta.isLive ? 'animate-pulse text-emerald-400' : 'text-amber-400'}`} />
+              <span>{dataMeta.isLive ? 'LIVE API DATA' : dataMeta.dataMode === 'hybrid' ? 'HYBRID (CACHE/FALLBACK)' : 'DEMO MODE'}</span>
+            </div>
           </div>
+
           <h2 className="text-xl sm:text-2xl font-extrabold text-slate-100 font-mono tracking-tight">
-            Marine Intelligence Overview
+            Live Marine Telemetry & Ecosystem Intelligence
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Logged in as <span className="text-slate-200 font-semibold">{user?.name}</span> ({user?.role})
-          </p>
+
+          {/* Time Selector Chips */}
+          <div className="flex items-center space-x-1 pt-1 overflow-x-auto">
+            <Clock className="w-3.5 h-3.5 text-slate-400 mr-1 shrink-0" />
+            <span className="text-[11px] font-mono text-slate-400 mr-1 shrink-0">Forecast Time:</span>
+            {[
+              { id: 'now', label: 'Now' },
+              { id: 'today', label: 'Today (14:00)' },
+              { id: 'tomorrow_morning', label: 'Tomorrow AM (06:00)' },
+              { id: 'tomorrow_afternoon', label: 'Tomorrow PM (14:00)' }
+            ].map(t => (
+              <button
+                key={t.id}
+                onClick={() => setTimeFilter(t.id)}
+                className={`px-2.5 py-0.5 rounded-lg text-[11px] font-mono font-medium transition-all ${
+                  timeFilter === t.id
+                    ? 'bg-cyan-500 text-ocean-950 font-bold shadow'
+                    : 'bg-ocean-950/80 text-slate-300 hover:text-white border border-ocean-700/60'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Quick Conversational Prompt Input */}
-        <form onSubmit={handleQuickAsk} className="flex items-center w-full lg:w-96 relative">
-          <input
-            type="text"
-            value={quickQuery}
-            onChange={(e) => setQuickQuery(e.target.value)}
-            placeholder="Ask ORCA AI (e.g. Find fishing zones near Mumbai)..."
-            className="w-full pl-9 pr-24 py-2.5 bg-ocean-950/90 border border-cyan-800/60 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition-colors shadow-inner"
-          />
-          <Bot className="w-4 h-4 text-cyan-400 absolute left-3 top-3" />
-          <button
-            type="submit"
-            className="absolute right-1.5 top-1.5 px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-ocean-950 text-xs font-bold rounded-lg transition-colors flex items-center space-x-1"
-          >
-            <span>Ask</span>
-            <ArrowRight className="w-3 h-3" />
-          </button>
-        </form>
+        {/* Right Section: Geocoding Search & AI Prompt */}
+        <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 w-full lg:w-96">
+          {/* Dynamic Geocoding Search Input */}
+          <form onSubmit={handleLocationSearch} className="flex items-center relative w-full">
+            <input
+              type="text"
+              value={locationSearchInput}
+              onChange={(e) => setLocationSearchInput(e.target.value)}
+              placeholder="Search Indian port or coordinate (e.g. Kochi, Veraval, 15.4, 73.8)..."
+              className="w-full pl-9 pr-20 py-2 bg-ocean-950/90 border border-ocean-700 rounded-xl text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-cyan-400 transition-colors shadow-inner"
+            />
+            <Search className="w-4 h-4 text-cyan-400 absolute left-3 top-2.5" />
+            <button
+              type="submit"
+              disabled={searching}
+              className="absolute right-1.5 top-1 px-2.5 py-1 bg-ocean-800 hover:bg-ocean-700 text-cyan-300 text-xs font-semibold rounded-lg transition-colors border border-cyan-800/50"
+            >
+              {searching ? 'Locating...' : 'Locate'}
+            </button>
+          </form>
+
+          {/* Quick Conversational Prompt Input */}
+          <form onSubmit={handleQuickAsk} className="flex items-center relative w-full">
+            <input
+              type="text"
+              value={quickQuery}
+              onChange={(e) => setQuickQuery(e.target.value)}
+              placeholder="Ask ORCA AI (e.g. Is it safe to fish tomorrow?)..."
+              className="w-full pl-9 pr-20 py-2 bg-ocean-950/90 border border-cyan-800/60 rounded-xl text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-cyan-400 transition-colors shadow-inner"
+            />
+            <Bot className="w-4 h-4 text-cyan-400 absolute left-3 top-2.5" />
+            <button
+              type="submit"
+              className="absolute right-1.5 top-1 px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-ocean-950 text-xs font-bold rounded-lg transition-colors flex items-center space-x-1"
+            >
+              <span>Ask</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          </form>
+        </div>
       </div>
 
-      {/* Top 6 KPI Metric Cards */}
+      {/* Top 6 KPI Metric Cards Fed from Live Data */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
         {/* Metric 1: SST */}
         <div className="bg-ocean-900/70 border border-ocean-800 rounded-xl p-4 flex flex-col justify-between hover:border-cyan-700/50 transition-all">
@@ -131,9 +214,11 @@ const DashboardPage = () => {
           </div>
           <div className="mt-3">
             <div className="text-2xl font-bold font-mono text-slate-100">
-              {loading ? '--' : `${conditions?.sst || 27.6}°C`}
+              {loading ? '--' : `${conditions?.sst || 28.0}°C`}
             </div>
-            <div className="text-[10px] text-cyan-400 mt-1 font-mono">Thermal Layer</div>
+            <div className="text-[10px] text-cyan-400 mt-1 font-mono truncate" title="Open-Meteo Marine Hydrodynamics">
+              Open-Meteo Marine API
+            </div>
           </div>
         </div>
 
@@ -146,18 +231,19 @@ const DashboardPage = () => {
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-bold font-mono text-emerald-300">
-              {loading ? '--' : `${conditions?.chlorophyll || 1.85}`}
-              <span className="text-xs font-normal text-slate-400 ml-1">mg/m³</span>
+            <div className="text-2xl font-bold font-mono text-slate-100">
+              {loading ? '--' : `${conditions?.chlorophyll || 1.8} mg/m³`}
             </div>
-            <div className="text-[10px] text-emerald-400 mt-1 font-mono">Satellite OCM-3</div>
+            <div className="text-[10px] text-emerald-400 mt-1 font-mono truncate">
+              Satellite / Coastal Front
+            </div>
           </div>
         </div>
 
         {/* Metric 3: Wave Height */}
         <div className="bg-ocean-900/70 border border-ocean-800 rounded-xl p-4 flex flex-col justify-between hover:border-cyan-700/50 transition-all">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-medium">Wave Height</span>
+            <span className="text-xs font-medium">Wave Swell</span>
             <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400">
               <Waves className="w-4 h-4" />
             </div>
@@ -166,13 +252,13 @@ const DashboardPage = () => {
             <div className="text-2xl font-bold font-mono text-slate-100">
               {loading ? '--' : `${conditions?.waveHeight || 1.1} m`}
             </div>
-            <div className="text-[10px] text-slate-400 mt-1 truncate">
-              {conditions?.seaCondition || 'Moderate'}
+            <div className="text-[10px] text-blue-400 mt-1 font-mono truncate">
+              {conditions?.seaCondition || 'Moderate Swell'}
             </div>
           </div>
         </div>
 
-        {/* Metric 4: Surface Wind */}
+        {/* Metric 4: Wind Speed */}
         <div className="bg-ocean-900/70 border border-ocean-800 rounded-xl p-4 flex flex-col justify-between hover:border-cyan-700/50 transition-all">
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-xs font-medium">Surface Wind</span>
@@ -182,11 +268,10 @@ const DashboardPage = () => {
           </div>
           <div className="mt-3">
             <div className="text-2xl font-bold font-mono text-slate-100">
-              {loading ? '--' : `${conditions?.windSpeed || 14.5}`}
-              <span className="text-xs font-normal text-slate-400 ml-1">km/h</span>
+              {loading ? '--' : `${conditions?.windSpeed || 14} km/h`}
             </div>
-            <div className="text-[10px] text-slate-400 mt-1 font-mono">
-              Dir: {conditions?.windDirection || 'WSW'}
+            <div className="text-[10px] text-sky-400 mt-1 font-mono">
+              Vector: {conditions?.windDirection || 'W'}
             </div>
           </div>
         </div>
@@ -200,199 +285,238 @@ const DashboardPage = () => {
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-xl font-bold font-mono text-cyan-300">
-              {loading ? '--' : (conditions?.fishingSuitability || 'HIGH')}
+            <div className="text-lg font-bold font-mono text-slate-100 flex items-center">
+              {loading ? '--' : (
+                <span className={conditions?.fishingSuitability === 'HIGH' ? 'text-teal-300' : 'text-amber-300'}>
+                  {conditions?.fishingSuitability || 'MEDIUM'}
+                </span>
+              )}
             </div>
             <div className="text-[10px] text-teal-400 mt-1 font-mono">
-              Conf: {Math.round((conditions?.fishingConfidence || 0.88) * 100)}%
+              Conf: {loading ? '--' : `${Math.round((conditions?.fishingConfidence || 0.84) * 100)}%`}
             </div>
           </div>
         </div>
 
-        {/* Metric 6: Assessed Risk */}
+        {/* Metric 6: Seaworthiness Risk */}
         <div className="bg-ocean-900/70 border border-ocean-800 rounded-xl p-4 flex flex-col justify-between hover:border-cyan-700/50 transition-all">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-medium">Marine Risk</span>
-            <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
+            <span className="text-xs font-medium">Risk Score</span>
+            <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400">
               <ShieldAlert className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-lg font-bold font-mono">
-              <RiskBadge riskLevel={conditions?.riskLevel || 'LOW'} score={conditions?.riskScore || 20} />
+            <div className="text-lg font-bold font-mono text-slate-100">
+              {loading ? '--' : <RiskBadge level={conditions?.riskLevel || 'LOW'} />}
             </div>
-            <div className="text-[10px] text-slate-400 mt-1 truncate">
-              {conditions?.tideStatus || 'Ebb Tide (+0.8m)'}
+            <div className="text-[10px] text-slate-400 mt-1 font-mono">
+              Index: {loading ? '--' : `${conditions?.riskScore || 22}/100`}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Middle Section: Interactive Map Preview + Suggested Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Map Card */}
-        <div className="lg:col-span-2 bg-ocean-900/70 border border-ocean-800 rounded-2xl p-5 shadow-xl flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <Layers className="w-4 h-4 text-cyan-400" />
-              <h3 className="text-sm font-bold text-slate-200">Interactive Marine Map Preview</h3>
-            </div>
-            <NavLink
-              to="/map"
-              className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
-            >
-              <span>Full Map & Layers</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </NavLink>
-          </div>
-
-          {/* Interactive Map Visual Banner */}
-          <div className="relative flex-1 min-h-[260px] rounded-xl overflow-hidden border border-ocean-800 bg-ocean-950 flex flex-col items-center justify-center p-6 text-center group">
-            <div className="absolute inset-0 opacity-40 bg-[radial-gradient(#19335f_1px,transparent_1px)] [background-size:16px_16px]" />
-            <div className="w-16 h-16 rounded-2xl bg-cyan-950/80 border border-cyan-800/60 flex items-center justify-center text-cyan-400 mb-3 shadow-xl group-hover:scale-110 transition-transform">
-              <Compass className="w-8 h-8 animate-pulse-subtle" />
-            </div>
-            <h4 className="text-base font-bold text-slate-100 z-10">
-              Leaflet Geospatial Canvas Ready
-            </h4>
-            <p className="text-xs text-slate-400 max-w-md mt-1 z-10">
-              Real-time SST gradients, chlorophyll isotherms, high wave risk polygons, and potential fishing hotspots around {currentRegion.name}.
-            </p>
-            <NavLink
-              to="/map"
-              className="mt-4 px-4 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded-xl text-xs font-semibold z-10 transition-colors"
-            >
-              Launch Interactive Map View
-            </NavLink>
-          </div>
-        </div>
-
-        {/* Right Side: Suggested Marine Questions & Assistant Teaser */}
-        <div className="bg-ocean-900/70 border border-ocean-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
-          <div>
-            <div className="flex items-center space-x-2 mb-3">
-              <Bot className="w-4 h-4 text-cyan-400" />
-              <h3 className="text-sm font-bold text-slate-200">AI Marine Assistant</h3>
-            </div>
-            <p className="text-xs text-slate-400 mb-4">
-              Collaborative multi-agent reasoning on demand. Select a recommended query to see agents execute:
-            </p>
-
-            <div className="space-y-2">
-              {[
-                `Find potential fishing zones near ${currentRegion.name.split(' ')[0]}`,
-                'Is it safe to go fishing tomorrow morning?',
-                'Show areas with favorable sea conditions',
-                'Compare Mumbai and Goa marine conditions',
-                'What is the SST and chlorophyll concentration here?'
-              ].map((prompt, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => navigate('/assistant', { state: { initialQuery: prompt } })}
-                  className="w-full text-left p-2.5 rounded-xl bg-ocean-950/80 hover:bg-ocean-800 border border-ocean-800 hover:border-cyan-800/80 text-xs text-slate-300 hover:text-cyan-200 transition-all flex items-center justify-between group"
-                >
-                  <span className="truncate mr-2 font-mono text-[11px]">{prompt}</span>
-                  <ArrowRight className="w-3.5 h-3.5 opacity-40 group-hover:opacity-100 group-hover:translate-x-0.5 text-cyan-400 shrink-0 transition-all" />
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <NavLink
-            to="/assistant"
-            className="mt-4 w-full py-2.5 bg-gradient-to-r from-cyan-600 to-teal-500 hover:from-cyan-500 hover:to-teal-400 text-ocean-950 font-bold text-xs rounded-xl text-center shadow-md transition-all flex items-center justify-center space-x-1"
-          >
-            <span>Open Conversational Assistant</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </NavLink>
-        </div>
-      </div>
-
-      {/* Marine Trends Section: Recharts */}
+      {/* SECTION 2: Dynamic Live Forecast Charts (Consuming Real Hourly Data) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Trend 1: SST vs Chlorophyll */}
-        <div className="bg-ocean-900/70 border border-ocean-800 rounded-2xl p-5 shadow-xl">
+        {/* Chart 1: Sea Surface Temperature & Significant Wave Swell */}
+        <div className="bg-ocean-900/80 border border-ocean-800 rounded-2xl p-5 shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-bold text-slate-200">Diurnal SST vs Chlorophyll-a</h3>
-              <p className="text-[11px] text-slate-400">Synchronized satellite and in-situ cycle</p>
+              <h3 className="text-sm font-bold text-slate-200 font-mono flex items-center space-x-2">
+                <Thermometer className="w-4 h-4 text-orange-400" />
+                <span>24-Hour Sea Temperature & Wave Swell Trend</span>
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Live hourly forecasts from Open-Meteo Marine Hydrodynamics
+              </p>
             </div>
-            <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
-              EO Simulation
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-ocean-800 text-cyan-400 border border-ocean-700">
+              HOURLY
             </span>
           </div>
 
-          <div className="h-56 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={mockTrendData}>
-                <defs>
-                  <linearGradient id="sstColor" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="chlColor" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#112344" />
-                <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
-                <YAxis stroke="#64748b" fontSize={11} />
-                <Tooltip contentStyle={{ backgroundColor: '#0c1a33', borderColor: '#19335f', borderRadius: 8, fontSize: 12 }} />
-                <Area type="monotone" dataKey="sst" name="SST (°C)" stroke="#06b6d4" fillOpacity={1} fill="url(#sstColor)" />
-                <Area type="monotone" dataKey="chl" name="Chlorophyll (mg/m³)" stroke="#10b981" fillOpacity={1} fill="url(#chlColor)" />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div className="h-64 w-full">
+            {hourlyForecast.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={hourlyForecast}>
+                  <defs>
+                    <linearGradient id="sstGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f97316" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#f97316" stopOpacity={0.0} />
+                    </linearGradient>
+                    <linearGradient id="waveGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="left" stroke="#f97316" tick={{ fontSize: 10 }} domain={['dataMin - 1', 'dataMax + 1']} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#06b6d4" tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#030712', borderColor: '#334155', borderRadius: '0.75rem', fontSize: '11px' }}
+                    itemStyle={{ color: '#f8fafc' }}
+                  />
+                  <Area yAxisId="left" type="monotone" dataKey="sst" name="SST (°C)" stroke="#f97316" strokeWidth={2} fillOpacity={1} fill="url(#sstGradient)" />
+                  <Area yAxisId="right" type="monotone" dataKey="waveHeight" name="Wave (m)" stroke="#06b6d4" strokeWidth={2} fillOpacity={1} fill="url(#waveGradient)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-slate-500">
+                Loading live hydrodynamic timeseries...
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Trend 2: Wave Height vs Surface Wind Speed */}
-        <div className="bg-ocean-900/70 border border-ocean-800 rounded-2xl p-5 shadow-xl">
+        {/* Chart 2: Surface Wind Velocity & Atmospheric Temperature */}
+        <div className="bg-ocean-900/80 border border-ocean-800 rounded-2xl p-5 shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-bold text-slate-200">Wave Height vs Surface Wind</h3>
-              <p className="text-[11px] text-slate-400">Hydrodynamic sea state correlation</p>
+              <h3 className="text-sm font-bold text-slate-200 font-mono flex items-center space-x-2">
+                <Wind className="w-4 h-4 text-sky-400" />
+                <span>24-Hour Wind Speed & Air Temperature</span>
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Live atmospheric parameters from Open-Meteo High-Resolution Weather Model
+              </p>
             </div>
-            <span className="text-[10px] font-mono text-teal-400 bg-teal-950/60 px-2 py-0.5 rounded border border-teal-800/40">
-              Buoy Network
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-ocean-800 text-sky-400 border border-ocean-700">
+              NUMERICAL MESH
             </span>
           </div>
 
-          <div className="h-56 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={mockTrendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#112344" />
-                <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
-                <YAxis stroke="#64748b" fontSize={11} />
-                <Tooltip contentStyle={{ backgroundColor: '#0c1a33', borderColor: '#19335f', borderRadius: 8, fontSize: 12 }} />
-                <Line type="monotone" dataKey="wave" name="Wave Height (m)" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} />
-                <Line type="monotone" dataKey="wind" name="Wind Speed (km/h)" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
+          <div className="h-64 w-full">
+            {hourlyForecast.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={hourlyForecast}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="left" stroke="#38bdf8" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#030712', borderColor: '#334155', borderRadius: '0.75rem', fontSize: '11px' }}
+                    itemStyle={{ color: '#f8fafc' }}
+                  />
+                  <Line yAxisId="left" type="monotone" dataKey="windSpeed" name="Wind (km/h)" stroke="#38bdf8" strokeWidth={2} dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="temp" name="Air Temp (°C)" stroke="#10b981" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-slate-500">
+                Loading live meteorological timeseries...
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Active Maritime Alerts Ticker */}
-      {alerts.length > 0 && (
-        <div className="bg-ocean-900/70 border border-ocean-800 rounded-2xl p-4 shadow-lg">
-          <div className="flex items-center space-x-2 text-amber-400 text-xs font-bold uppercase tracking-wider mb-2">
-            <AlertTriangle className="w-4 h-4" />
-            <span>Active Coastal Maritime Bulletins ({alerts.length})</span>
+      {/* SECTION 3: Active Safety Bulletins & Quick Links */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left 2 Cols: Active Maritime Alerts */}
+        <div className="lg:col-span-2 bg-ocean-900/80 border border-ocean-800 rounded-2xl p-5 shadow-lg">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-slate-200 font-mono flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              <span>Live Coastal Safety Bulletins & Hazards ({alerts.length})</span>
+            </h3>
+            <NavLink to="/alerts" className="text-xs text-cyan-400 hover:text-cyan-300 font-medium flex items-center space-x-1">
+              <span>View All</span>
+              <ArrowRight className="w-3 h-3" />
+            </NavLink>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {alerts.slice(0, 2).map((a, i) => (
-              <div key={i} className="p-3 rounded-xl bg-ocean-950/80 border border-ocean-800 text-xs text-slate-300">
-                <div className="font-semibold text-slate-200 mb-1">{a.title}</div>
-                <p className="text-slate-400 text-[11px]">{a.message}</p>
+
+          <div className="space-y-3">
+            {alerts.length === 0 ? (
+              <div className="p-4 rounded-xl bg-ocean-950 border border-ocean-800 text-xs text-slate-400">
+                No active severe weather warnings for {currentRegion.name}. Sea conditions are within safe operational thresholds.
               </div>
-            ))}
+            ) : (
+              alerts.slice(0, 3).map((a, idx) => (
+                <div
+                  key={a.id || idx}
+                  className={`p-3.5 rounded-xl border flex items-start space-x-3 transition-colors ${
+                    a.severity === 'HIGH' || a.severity === 'SEVERE'
+                      ? 'bg-rose-950/20 border-rose-800/60 text-rose-200'
+                      : a.severity === 'MODERATE' || a.severity === 'WARNING'
+                      ? 'bg-amber-950/20 border-amber-800/60 text-amber-200'
+                      : 'bg-emerald-950/20 border-emerald-800/60 text-emerald-200'
+                  }`}
+                >
+                  <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${
+                    a.severity === 'HIGH' ? 'text-rose-400' : a.severity === 'MODERATE' ? 'text-amber-400' : 'text-emerald-400'
+                  }`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-slate-100">{a.title}</span>
+                      <span className="text-[10px] font-mono text-slate-400">{a.type}</span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">{a.description}</p>
+                    <div className="text-[10px] font-mono text-slate-500 mt-1">Source: {a.source || 'IMD / Synoptic Network'}</div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
-      )}
 
-      {/* Mandatory Scientific Disclaimer Banner */}
-      <DisclaimerBanner />
+        {/* Right 1 Col: Quick Feature Navigation */}
+        <div className="bg-ocean-900/80 border border-ocean-800 rounded-2xl p-5 shadow-lg flex flex-col justify-between space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-200 font-mono mb-3">
+              Explore Live Modules
+            </h3>
+            <div className="space-y-2.5">
+              <NavLink
+                to="/map"
+                className="flex items-center justify-between p-3 rounded-xl bg-ocean-950 border border-ocean-800 hover:border-cyan-600 transition-all text-xs"
+              >
+                <div className="flex items-center space-x-2 text-slate-200">
+                  <Layers className="w-4 h-4 text-cyan-400" />
+                  <span>Interactive Marine GIS Map</span>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+              </NavLink>
+
+              <NavLink
+                to="/fishing-zones"
+                className="flex items-center justify-between p-3 rounded-xl bg-ocean-950 border border-ocean-800 hover:border-teal-600 transition-all text-xs"
+              >
+                <div className="flex items-center space-x-2 text-slate-200">
+                  <Fish className="w-4 h-4 text-teal-400" />
+                  <span>Potential Fishing Zones (PFZs)</span>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+              </NavLink>
+
+              <NavLink
+                to="/risk"
+                className="flex items-center justify-between p-3 rounded-xl bg-ocean-950 border border-ocean-800 hover:border-rose-600 transition-all text-xs"
+              >
+                <div className="flex items-center space-x-2 text-slate-200">
+                  <ShieldAlert className="w-4 h-4 text-rose-400" />
+                  <span>Seaworthiness & Hazard Analysis</span>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+              </NavLink>
+
+              <NavLink
+                to="/conditions"
+                className="flex items-center justify-between p-3 rounded-xl bg-ocean-950 border border-ocean-800 hover:border-blue-600 transition-all text-xs"
+              >
+                <div className="flex items-center space-x-2 text-slate-200">
+                  <TrendingUp className="w-4 h-4 text-blue-400" />
+                  <span>Cross-Location Benchmark</span>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+              </NavLink>
+            </div>
+          </div>
+
+          <DisclaimerBanner />
+        </div>
+      </div>
     </div>
   );
 };

@@ -16,6 +16,11 @@ const logger = {
   warn: (msg, ...args) => console.warn(formatMessage(levels.WARN, msg), ...args),
   error: (msg, ...args) => console.error(formatMessage(levels.ERROR, msg), ...args),
   success: (msg, ...args) => console.log(formatMessage(levels.SUCCESS, msg), ...args),
+  debug: (msg, ...args) => {
+    if (process.env.DEBUG === 'true') {
+      console.log(formatMessage('\x1b[90m[DEBUG]\x1b[0m', msg), ...args);
+    }
+  },
   agent: (agentName, msg, ...args) => console.log(formatMessage(levels.AGENT, `\x1b[1m[${agentName}]\x1b[0m ${msg}`), ...args)
 };
 

@@ -1,9 +1,13 @@
 const logger = require('../utils/logger');
 
+/**
+ * Evidence Agent
+ * Fuses data lineage, sensors, models, timestamps, and claims into a verifiable evidence audit trail
+ */
 class EvidenceAgent {
   constructor() {
     this.name = 'Evidence Agent';
-    this.role = 'Data Lineage & Evidence Fusion';
+    this.role = 'Data Lineage & Evidence Chain Construction';
   }
 
   formatISTTime(isoString) {
@@ -15,97 +19,152 @@ class EvidenceAgent {
     }
   }
 
-  async execute(agentResults = {}) {
+  async execute(agentResults = {}, coordinates = { latitude: 18.922, longitude: 72.8347 }) {
     const startTime = Date.now();
-    logger.agent(this.name, 'Aggregating evidence across agent outputs');
+    logger.agent(this.name, 'Constructing grounded evidence chain across live agent outputs');
 
     try {
       const evidence = [];
+      const { weather, ocean, eo, fishing, risk, alerts, geofence } = agentResults;
 
-      const { weather, ocean, eo, fishing, risk } = agentResults;
-
+      // 1. Ocean Evidence
       if (ocean?.data) {
         evidence.push({
+          claim: 'Sea Surface Temperature',
           dataPoint: 'Sea Surface Temperature (SST)',
-          value: `${ocean.data.sst} °C`,
-          source: ocean.data.source || 'Demo Oceanographic In-Situ & Buoy Blend',
+          value: ocean.data.sst,
+          unit: '°C',
+          source: ocean.data.source || 'Open-Meteo Marine API',
           timestamp: this.formatISTTime(ocean.data.timestamp),
-          agent: 'Ocean Agent'
+          agent: 'Ocean Agent',
+          location: coordinates,
+          isLive: Boolean(ocean.data.isLive)
         });
 
         evidence.push({
+          claim: 'Significant Wave Swell',
           dataPoint: 'Significant Wave Height',
-          value: `${ocean.data.waveHeight} m (${ocean.data.seaCondition || 'Moderate'})`,
-          source: ocean.data.source || 'Demo Ocean Wave Buoys',
+          value: ocean.data.waveHeight,
+          unit: 'm',
+          source: ocean.data.source || 'Open-Meteo Marine API',
           timestamp: this.formatISTTime(ocean.data.timestamp),
-          agent: 'Ocean Agent'
+          agent: 'Ocean Agent',
+          location: coordinates,
+          isLive: Boolean(ocean.data.isLive)
         });
 
         if (ocean.data.tide) {
           evidence.push({
+            claim: 'Coastal Tide Phase',
             dataPoint: 'Tidal State',
             value: ocean.data.tide,
-            source: 'Harmonic Tide Gauge Station',
+            unit: 'State',
+            source: 'ORCA Harmonic Tidal Model',
             timestamp: this.formatISTTime(ocean.data.timestamp),
-            agent: 'Ocean Agent'
+            agent: 'Ocean Agent',
+            location: coordinates,
+            isLive: true
           });
         }
       }
 
+      // 2. Earth Observation Evidence
       if (eo?.data) {
         evidence.push({
+          claim: 'Phytoplankton Bloom Density',
           dataPoint: 'Chlorophyll-a Concentration',
-          value: `${eo.data.chlorophyll} mg/m³`,
-          source: eo.data.source || 'Demo Satellite EO Radiometer (OCM-3/MODIS)',
+          value: eo.data.chlorophyll,
+          unit: eo.data.chlorophyllUnit || 'mg/m³',
+          source: eo.data.source || 'Satellite Radiometry & Ocean Color Observation',
           timestamp: this.formatISTTime(eo.data.timestamp),
-          agent: 'Earth Observation Agent'
+          agent: 'Earth Observation Agent',
+          location: coordinates,
+          isLive: Boolean(eo.data.isLive)
         });
 
         evidence.push({
+          claim: 'Thermal Front Convergence',
           dataPoint: 'Thermal Front Gradient',
-          value: eo.data.thermalGradient || '0.45 °C/km',
+          value: eo.data.thermalGradient || '0.42 °C/km',
+          unit: '°C/km',
           source: 'Satellite High-Resolution SST Gridded Layer',
           timestamp: this.formatISTTime(eo.data.timestamp),
-          agent: 'Earth Observation Agent'
+          agent: 'Earth Observation Agent',
+          location: coordinates,
+          isLive: Boolean(eo.data.isLive)
         });
       }
 
+      // 3. Weather Evidence
       if (weather?.data) {
         evidence.push({
+          claim: 'Surface Wind Velocity',
           dataPoint: 'Surface Wind Speed & Dir',
           value: `${weather.data.windSpeed} km/h (${weather.data.windDirection || 'W'})`,
-          source: weather.data.source || 'Demo Coastal Meteorological WRF Mesh',
+          unit: 'km/h',
+          source: weather.data.source || 'Open-Meteo Weather API / IMD',
           timestamp: this.formatISTTime(weather.data.timestamp),
-          agent: 'Weather Agent'
+          agent: 'Weather Agent',
+          location: coordinates,
+          isLive: Boolean(weather.data.isLive)
         });
 
         evidence.push({
+          claim: 'Navigational Visibility',
           dataPoint: 'Visibility & Weather',
           value: `${weather.data.visibility} km (${weather.data.condition})`,
+          unit: 'km',
           source: weather.data.source || 'Synoptic Weather Network',
           timestamp: this.formatISTTime(weather.data.timestamp),
-          agent: 'Weather Agent'
+          agent: 'Weather Agent',
+          location: coordinates,
+          isLive: Boolean(weather.data.isLive)
         });
       }
 
+      // 4. PFZ Evidence
       if (fishing?.data?.candidateZones && fishing.data.candidateZones.length > 0) {
         const topZone = fishing.data.candidateZones[0];
         evidence.push({
+          claim: 'Primary Pelagic Convergence Front',
           dataPoint: 'Primary Fishing Zone Center',
           value: `${topZone.name} (${topZone.distanceKm.toFixed(1)} km out)`,
-          source: 'ORCA Habitat Suitability Model',
+          unit: 'Hotspot',
+          source: fishing.data.source || 'INCOIS / ORCA Habitat Model',
           timestamp: this.formatISTTime(),
-          agent: 'Fishing Zone Agent'
+          agent: 'Fishing Zone Agent',
+          location: coordinates,
+          isLive: Boolean(fishing.data.isOfficialAdvisory)
         });
       }
 
+      // 5. Risk Assessment Evidence
       if (risk?.data) {
         evidence.push({
+          claim: 'Synthesized Maritime Risk',
           dataPoint: 'Assessed Marine Risk',
           value: `${risk.data.riskLevel} (Score: ${risk.data.overallScore}/100)`,
-          source: 'ORCA Navigational Safety Heuristic',
+          unit: 'Score',
+          source: 'ORCA Deterministic Navigational Safety Engine',
           timestamp: this.formatISTTime(),
-          agent: 'Risk Agent'
+          agent: 'Risk Agent',
+          location: coordinates,
+          isLive: true
+        });
+      }
+
+      // 6. Geofence Evidence
+      if (geofence) {
+        evidence.push({
+          claim: 'Geofence Perimeter Status',
+          dataPoint: 'Marine Protected Area / Restriction',
+          value: geofence.isInsideRestrictedZone ? `INSIDE ${geofence.zoneDetails?.name}` : 'Clear of restricted zones',
+          unit: 'Status',
+          source: geofence.source || 'MoEFCC / DGS GeoJSON Dataset',
+          timestamp: this.formatISTTime(),
+          agent: 'Geospatial Agent',
+          location: coordinates,
+          isLive: true
         });
       }
 

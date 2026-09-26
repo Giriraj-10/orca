@@ -7,6 +7,7 @@ const {
 } = require('../controllers/fishingZoneController');
 
 router.get('/', getFishingZones);
+router.get('/latest', getFishingZones);
 router.get('/nearby', getNearbyFishingZones);
 router.post('/analyze', analyzeFishingZone);
 

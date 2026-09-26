@@ -1,12 +1,18 @@
+const riskConfig = require('../config/riskConfig');
+const toolRegistry = require('../tools/ToolRegistry');
 const logger = require('../utils/logger');
 
+/**
+ * Deterministic Seaworthiness & Risk Engine
+ * Computes safety score from live physical observations, active alerts, and geofence status
+ */
 class RiskAgent {
   constructor() {
     this.name = 'Risk Agent';
-    this.role = 'Marine Hazard & Seaworthiness Risk Assessment';
+    this.role = 'Maritime Hazard & Seaworthiness Risk Assessment';
   }
 
-  evaluateRisk(weatherData, oceanData) {
+  evaluateRisk(weatherData, oceanData, geofenceData = null, alertData = null) {
     const windSpeed = weatherData?.windSpeed || 14;
     const waveHeight = oceanData?.waveHeight || 1.1;
     const visibility = weatherData?.visibility || 10;
@@ -16,59 +22,78 @@ class RiskAgent {
     let windRiskScore = 0;
     let visRiskScore = 0;
     let weatherRiskScore = 0;
+    let geofenceRiskScore = 0;
+    let alertRiskScore = 0;
 
-    // Wave assessment
-    if (waveHeight >= 2.8) waveRiskScore = 40;
-    else if (waveHeight >= 1.8) waveRiskScore = 25;
-    else if (waveHeight >= 1.2) waveRiskScore = 12;
+    // 1. Wave assessment (Max 40)
+    if (waveHeight >= riskConfig.waveScale.extreme) waveRiskScore = 40;
+    else if (waveHeight >= riskConfig.waveScale.rough) waveRiskScore = 25;
+    else if (waveHeight >= riskConfig.waveScale.moderate) waveRiskScore = 12;
     else waveRiskScore = 4;
 
-    // Wind assessment
-    if (windSpeed >= 35) windRiskScore = 35;
-    else if (windSpeed >= 24) windRiskScore = 22;
-    else if (windSpeed >= 15) windRiskScore = 10;
+    // 2. Wind assessment (Max 35)
+    if (windSpeed >= riskConfig.windScale.gale) windRiskScore = 35;
+    else if (windSpeed >= riskConfig.windScale.fresh) windRiskScore = 22;
+    else if (windSpeed >= riskConfig.windScale.moderate) windRiskScore = 10;
     else windRiskScore = 3;
 
-    // Visibility
-    if (visibility < 3.0) visRiskScore = 15;
-    else if (visibility < 6.0) visRiskScore = 8;
+    // 3. Visibility assessment (Max 15)
+    if (visibility < riskConfig.visibilityScale.fog) visRiskScore = 15;
+    else if (visibility < riskConfig.visibilityScale.mist) visRiskScore = 8;
     else visRiskScore = 0;
 
-    // Weather/squall
+    // 4. Convective squall / weather assessment (Max 10)
     if (precipitation > 5.0) weatherRiskScore = 10;
     else if (precipitation > 0.5) weatherRiskScore = 4;
 
-    const totalScore = waveRiskScore + windRiskScore + visRiskScore + weatherRiskScore;
+    // 5. Geofence penalty
+    if (geofenceData && geofenceData.isInsideRestrictedZone) {
+      geofenceRiskScore = 20;
+    } else if (geofenceData && geofenceData.distanceToNearestZoneKm < 2.0) {
+      geofenceRiskScore = 10;
+    }
+
+    // 6. Active Alerts penalty
+    if (alertData && Array.isArray(alertData.alerts)) {
+      const hasHighAlert = alertData.alerts.some(a => a.severity === 'HIGH');
+      const hasModAlert = alertData.alerts.some(a => a.severity === 'MODERATE');
+      if (hasHighAlert) alertRiskScore = 25;
+      else if (hasModAlert) alertRiskScore = 12;
+    }
+
+    const rawTotal = waveRiskScore + windRiskScore + visRiskScore + weatherRiskScore + geofenceRiskScore + alertRiskScore;
+    const compositeScore = Math.min(100, Math.round(rawTotal));
 
     let riskLevel = 'LOW';
-    if (totalScore >= 55) riskLevel = 'HIGH';
-    else if (totalScore >= 25) riskLevel = 'MODERATE';
-    else riskLevel = 'LOW';
+    if (compositeScore >= riskConfig.thresholds.highRisk) riskLevel = 'HIGH';
+    else if (compositeScore >= riskConfig.thresholds.moderateRisk) riskLevel = 'MODERATE';
 
     const reasons = [];
-    if (waveRiskScore >= 25) reasons.push(`Elevated wave height (${waveHeight} m) may induce severe vessel pitching`);
-    if (windRiskScore >= 22) reasons.push(`Brisk surface wind (${windSpeed} km/h) can cause rapid chop and drift`);
-    if (visRiskScore >= 8) reasons.push(`Reduced visibility (${visibility} km) requires radar watch`);
-    if (precipitation > 2.0) reasons.push(`Squall conditions with active precipitation (${precipitation} mm/h)`);
+    if (waveRiskScore >= 25) reasons.push(`Elevated wave swell (${waveHeight}m) poses capsizing/swamping hazard`);
+    if (windRiskScore >= 22) reasons.push(`Brisk surface wind (${windSpeed} km/h) creates steep coastal chop`);
+    if (visRiskScore >= 8) reasons.push(`Reduced visibility (${visibility} km) demands radar watch`);
+    if (precipitation > 2.0) reasons.push(`Active precipitation (${precipitation} mm/h) signals convective squalls`);
+    if (geofenceRiskScore >= 10) reasons.push(`Proximity or entry into restricted maritime zone (${geofenceData?.zoneDetails?.name || 'Protected Area'})`);
+    if (alertRiskScore >= 12) reasons.push('Active coastal hazard bulletins issued for this maritime sector');
     if (reasons.length === 0) reasons.push(`Benign hydrodynamic and meteorological parameters across the sector`);
 
     const recommendations = [];
     if (riskLevel === 'HIGH') {
-      recommendations.push('Strongly advise small crafts and artisanal canoes to remain in port');
-      recommendations.push('Commercial vessels should secure loose deck equipment and maintain continuous VHF watch');
-      recommendations.push('Avoid navigating through shallow coastal inlets where breaking waves are amplified');
+      recommendations.push('Strongly advise small artisanal crafts and motorized canoes (<10m) to remain in port');
+      recommendations.push('Commercial trawlers must secure deck gear and keep continuous VHF Ch-16 watch');
+      recommendations.push('Avoid navigating through shallow coastal sandbars where wave breaking is amplified');
     } else if (riskLevel === 'MODERATE') {
-      recommendations.push('Caution recommended for smaller traditional fishing boats (< 9m length)');
-      recommendations.push('Verify bilge pumps, backup communication, and lifejackets on all crew members');
-      recommendations.push('Track afternoon wind gusts and swell shifts before straying beyond 15 nautical miles');
+      recommendations.push('Heightened caution recommended for smaller traditional fishing boats');
+      recommendations.push('Inspect bilge pumps, lifejackets (PFDs), and emergency flares before sailing');
+      recommendations.push('Track afternoon wind gusts and swell shifts before venturing beyond 15 nautical miles');
     } else {
       recommendations.push('Conditions generally favorable for coastal navigation and artisanal fishing operations');
-      recommendations.push('Standard navigational watch and adherence to harbor egress protocols recommended');
+      recommendations.push('Standard navigational watch and harbor egress compliance recommended');
     }
 
     return {
       riskLevel,
-      overallScore: totalScore,
+      overallScore: compositeScore,
       subFactors: {
         waveRisk: {
           level: waveRiskScore >= 25 ? 'High' : waveRiskScore >= 12 ? 'Moderate' : 'Low',
@@ -89,6 +114,11 @@ class RiskAgent {
           level: weatherRiskScore >= 8 ? 'High' : 'Low',
           score: weatherRiskScore,
           value: weatherData?.condition || 'Fair'
+        },
+        geofenceRisk: {
+          level: geofenceRiskScore >= 15 ? 'High' : geofenceRiskScore >= 10 ? 'Moderate' : 'Low',
+          score: geofenceRiskScore,
+          value: geofenceData?.isInsideRestrictedZone ? 'INSIDE_RESTRICTED_ZONE' : 'CLEAR'
         }
       },
       explanation: reasons.join('; ') + '.',
@@ -97,12 +127,12 @@ class RiskAgent {
     };
   }
 
-  async execute(weatherData, oceanData) {
+  async execute(weatherData, oceanData, geofenceData = null, alertData = null) {
     const startTime = Date.now();
-    logger.agent(this.name, 'Synthesizing composite maritime risk model');
+    logger.agent(this.name, 'Computing deterministic risk score from live physical parameters');
 
     try {
-      const evaluation = this.evaluateRisk(weatherData, oceanData);
+      const evaluation = this.evaluateRisk(weatherData, oceanData, geofenceData, alertData);
       const latencyMs = Date.now() - startTime;
 
       return {

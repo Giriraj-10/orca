@@ -1,40 +1,31 @@
-const DataSource = require('../models/DataSource');
+const dsm = require('../dataSources/DataSourceManager');
 const MarineObservation = require('../models/MarineObservation');
 const FishingZone = require('../models/FishingZone');
 const Alert = require('../models/Alert');
 const User = require('../models/User');
 const { getDbStatus } = require('../config/db');
 const env = require('../config/env');
-const { generateDataSources } = require('../data/seedData');
 
-// @desc    Get all integrated data sources
-// @route   GET /api/data/sources
+// @desc    Get all integrated live data sources and their real connection status
+// @route   GET /api/data/sources (and GET /api/system/data-sources)
 const getDataSources = async (req, res, next) => {
   try {
-    let sources = [];
-    try {
-      sources = await DataSource.find({});
-    } catch (e) {
-      // fallback
-    }
-
-    if (!sources || sources.length === 0) {
-      sources = generateDataSources();
-    }
-
+    const statusReport = await dsm.getSystemDataSourcesStatus();
     res.json({
       success: true,
-      count: sources.length,
-      data: sources,
-      mode: env.DATA_MODE
+      dataMode: statusReport.activeDataMode,
+      cache: statusReport.cache,
+      data: statusReport.providers,
+      count: statusReport.providers.length,
+      timestamp: statusReport.timestamp
     });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Get system status & telemetry for Admin / Developer page
-// @route   GET /api/data/status
+// @desc    Get live system telemetry for Admin / Developer / Judging page
+// @route   GET /api/data/status (and GET /api/system/status)
 const getSystemStatus = async (req, res, next) => {
   try {
     const dbStatus = getDbStatus();
@@ -53,7 +44,7 @@ const getSystemStatus = async (req, res, next) => {
         counts.alerts = await Alert.countDocuments();
         counts.users = await User.countDocuments();
       }
-    } catch (e) {
+    } catch {
       // fallback to defaults
     }
 
@@ -65,14 +56,15 @@ const getSystemStatus = async (req, res, next) => {
     };
 
     const agentsStatus = [
-      { name: 'Coordinator Agent', status: 'ACTIVE', role: 'Orchestrator' },
-      { name: 'Weather Agent', status: 'ACTIVE', role: 'Atmospheric WRF Provider' },
-      { name: 'Ocean Agent', status: 'ACTIVE', role: 'In-Situ & Buoy Blend' },
-      { name: 'Earth Observation Agent', status: 'ACTIVE', role: 'Satellite OCM-3 / MODIS' },
-      { name: 'Fishing Zone Agent', status: 'ACTIVE', role: 'PFZ Heuristic Logic' },
-      { name: 'Geospatial Agent', status: 'ACTIVE', role: 'Haversine & Region Matcher' },
-      { name: 'Risk Agent', status: 'ACTIVE', role: 'Seaworthiness Scoring' },
-      { name: 'Evidence Agent', status: 'ACTIVE', role: 'Traceability & Fusion' }
+      { name: 'Coordinator Agent', status: 'ACTIVE', role: 'Dynamic Tool Orchestrator' },
+      { name: 'Planner Agent', status: 'ACTIVE', role: 'Intent-Driven Tool Selection' },
+      { name: 'Weather Agent', status: 'ACTIVE', role: 'IMD / Open-Meteo Weather Tool' },
+      { name: 'Ocean Agent', status: 'ACTIVE', role: 'Open-Meteo Marine Hydrodynamic Tool' },
+      { name: 'Earth Observation Agent', status: 'ACTIVE', role: 'Satellite Radiometry & Chlorophyll' },
+      { name: 'Fishing Zone Agent', status: 'ACTIVE', role: 'INCOIS / Derived PFZ Analytics' },
+      { name: 'Geospatial Agent', status: 'ACTIVE', role: 'Nominatim Geocoding & Turf.js Geofencing' },
+      { name: 'Risk Agent', status: 'ACTIVE', role: 'Deterministic Seaworthiness Scoring' },
+      { name: 'Evidence Agent', status: 'ACTIVE', role: 'Grounded Evidence Lineage & Audit' }
     ];
 
     res.json({
@@ -85,7 +77,7 @@ const getSystemStatus = async (req, res, next) => {
       aiProvider: aiStatus,
       agents: agentsStatus,
       metrics: counts,
-      version: '1.0.0-SIH-READY'
+      version: '2.0.0-API-DRIVEN'
     });
   } catch (error) {
     next(error);

@@ -11,7 +11,10 @@
     "seed": "node server/src/data/seedRunner.js",
     "build": "npm run build --prefix client",
     "start": "npm run start --prefix server",
-    "test": "node --test server/tests/api.test.js"
+    "test": "node --test server/tests/api.test.js",
+    "audit:hardcoded": "node scripts/auditHardcoded.js",
+    "test:apis": "node scripts/testApis.js",
+    "verify": "node scripts/auditHardcoded.js && node scripts/testApis.js"
   },
   "keywords": [
     "orca",

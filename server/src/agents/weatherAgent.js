@@ -1,20 +1,23 @@
-const { DemoWeatherProvider, LiveWeatherProvider } = require('../providers/WeatherProvider');
-const env = require('../config/env');
+const toolRegistry = require('../tools/ToolRegistry');
 const logger = require('../utils/logger');
 
 class WeatherAgent {
   constructor() {
     this.name = 'Weather Agent';
     this.role = 'Atmospheric & Meteorological Analysis';
-    this.provider = env.DATA_MODE === 'LIVE' ? new LiveWeatherProvider() : new DemoWeatherProvider();
   }
 
   async execute(latitude, longitude, targetDate = new Date()) {
     const startTime = Date.now();
-    logger.agent(this.name, `Analyzing weather conditions at [${latitude}, ${longitude}]`);
+    logger.agent(this.name, `Invoking weather_tool for [${latitude}, ${longitude}]`);
 
     try {
-      const data = await this.provider.getWeather(latitude, longitude, targetDate);
+      const weatherData = await toolRegistry.executeTool('weather_tool', {
+        latitude,
+        longitude,
+        targetDate
+      });
+
       const latencyMs = Date.now() - startTime;
 
       return {
@@ -23,17 +26,19 @@ class WeatherAgent {
         role: this.role,
         latencyMs,
         data: {
-          location: data.location,
-          regionId: data.regionId,
-          temperature: data.temperature,
-          windSpeed: data.windSpeed,
-          windDirection: data.windDirection,
-          precipitation: data.precipitation,
-          visibility: data.visibility,
-          condition: data.condition,
-          source: data.source,
-          mode: data.mode,
-          timestamp: data.timestamp
+          location: weatherData.location || { latitude, longitude },
+          temperature: weatherData.temperature,
+          windSpeed: weatherData.windSpeed,
+          windDirection: weatherData.windDirection,
+          precipitation: weatherData.precipitation,
+          visibility: weatherData.visibility,
+          condition: weatherData.condition,
+          hourlyTrends: weatherData.hourlyTrends || [],
+          source: weatherData.source || 'IMD / Open-Meteo High-Resolution Weather',
+          dataMode: weatherData.dataMode || 'live',
+          isLive: Boolean(weatherData.isLive),
+          isCached: Boolean(weatherData.isCached),
+          timestamp: weatherData.timestamp || new Date().toISOString()
         }
       };
     } catch (err) {
